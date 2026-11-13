@@ -1,30 +1,21 @@
 # Test Vectors FCR-RSA
 
-## Format
+Dokumen ini menjelaskan format dan cara menggunakan test vector untuk memverifikasi implementasi FCR-RSA Anda.
 
-Setiap file test vector adalah JSON dengan struktur:
+## Format JSON
+
+Setiap file test vector menggunakan format standar:
 
 ```json
 {
   "version": "1.0",
-  "tier": "A" | "B",
-  "description": "...",
+  "tier": "B",
   "cases": [
     {
-      "id": "case-001",
-      "params": {
-        "n": 100,
-        "seed": "hex...",
-        "q": "hex..."
-      },
-      "input": {
-        "plaintext": "hex...",
-        "key": "hex..."
-      },
-      "expected": {
-        "ciphertext": "hex...",
-        "decrypted": "hex..."
-      }
+      "id": "basic-001",
+      "params": { "n": 10, "seed": "...", "q": "..." },
+      "input": { "plaintext": "...", "blinding": "..." },
+      "expected": { "ciphertext": "...", "decrypted": "..." }
     }
   ]
 }
@@ -34,50 +25,23 @@ Setiap file test vector adalah JSON dengan struktur:
 
 | File | Deskripsi |
 | :--- | :--- |
-| `v1/basic.json` | Enkripsi/dekripsi dasar, Tier B, N kecil |
-| `v1/tier-a.json` | Parameter Tier A (N > 500) |
-| `v1/tier-b.json` | Parameter Tier B (matriks kecil) |
-| `v1/edge-cases.json` | Input kosong, N=0, overflow, dll |
+| `v1/basic.json` | Enkripsi/dekripsi dasar Tier B (parameter standar) |
+| `v1/edge-cases.json` | Kasus batas (N terlalu kecil, Q negatif, dll) |
+| `v1/tier-a.json` | Parameter Tier A (menyusul) |
+| `v1/tier-b.json` | Parameter Tier B varian (menyusul) |
 
-## Cara Menggunakan
+## Cara Memverifikasi
 
-### Rust
+1. Baca `params` dan `input` dari file JSON.
+2. Jalankan fungsi enkripsi pada implementasi Anda.
+3. Bandingkan output `ciphertext` Anda dengan `expected.ciphertext`.
+4. Jalankan dekripsi pada ciphertext tersebut.
+5. Bandingkan hasilnya dengan `expected.decrypted`.
 
-```bash
-cd fcr-core-rust
-cargo test --test integration
-```
+Jika hasilnya cocok (100% identik), berarti implementasi Anda konsisten dengan protokol FCR-RSA v0.1.0.
+Jika tidak cocok, periksa kembali penanganan *noise* SHA-256 dan operasi modulo BigInt Anda.
 
-### Python
+## Catatan Penting
 
-```bash
-cd fcr-python
-pytest tests/
-```
-
-## Cara Memverifikasi Test Vector
-
-Untuk memverifikasi bahwa implementasi Anda benar:
-
-1. Baca `params` dari kasus uji
-2. Jalankan enkripsi pada `input.plaintext` dengan `input.key`
-3. Bandingkan hasil dengan `expected.ciphertext`
-4. Jalankan dekripsi pada `expected.ciphertext`
-5. Bandingkan hasil dengan `expected.decrypted`
-
-Jika hasil tidak cocok, ada bug di implementasi.
-
-## Menambah Test Vector Baru
-
-1. Buat kasus uji di salah satu file yang ada
-2. Beri `id` unik
-3. Verifikasi hasilnya dengan **dua implementasi** (Rust dan Python)
-4. Kirim Pull Request
-
-## Status
-
-Test vector masih dalam penyusunan. Target: 100+ kasus sebelum v1.0.
-
----
-
-**Terakhir diperbarui:** 13 November 2026
+- **Blinding Factor:** Pada test vector ini, `blinding` sengaja dibuat konstan (misal `12345`) agar output deterministik dan bisa dibandingkan. Di produksi, `blinding` harus acak.
+- **Error Handling:** Untuk kasus di `edge-cases.json`, implementasi Anda harus mengembalikan error (Rust: `Result::Err`, Python: `ValueError`), bukan menghasilkan ciphertext.

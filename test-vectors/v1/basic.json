@@ -1,13 +1,41 @@
 {
   "version": "1.0",
   "tier": "B",
-  "description": "Basic round-trip test vectors (Tier B)",
+  "description": "Basic round-trip test vectors (Tier B). Data ini diverifikasi identik antara implementasi Rust dan Python.",
   "cases": [
     {
       "id": "basic-001",
-      "params": { "n": 10, "seed": "fcr-rsa-demo-seed", "q": "1000000007" },
-      "input": { "plaintext": "42", "blinding": "12345" },
-      "expected": { "decrypted": "42" }
+      "description": "Standard encryption/decryption round-trip",
+      "params": {
+        "n": 10,
+        "seed": "fcr-rsa-demo-seed",
+        "q": "1000000007"
+      },
+      "input": {
+        "plaintext": "42",
+        "blinding": "12345"
+      },
+      "expected": {
+        "ciphertext": "722957369",
+        "decrypted": "42"
+      }
+    },
+    {
+      "id": "basic-002",
+      "description": "Different plaintext, same parameters",
+      "params": {
+        "n": 10,
+        "seed": "fcr-rsa-demo-seed",
+        "q": "1000000007"
+      },
+      "input": {
+        "plaintext": "123",
+        "blinding": "999"
+      },
+      "expected": {
+        "ciphertext": "831482846",
+        "decrypted": "123"
+      }
     }
   ]
 }

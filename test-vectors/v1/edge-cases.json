@@ -1,6 +1,39 @@
 {
   "version": "1.0",
   "tier": "mixed",
-  "description": "Edge cases: empty, N=0, overflow (placeholder)",
-  "cases": []
+  "description": "Edge cases: parameter tidak valid harus memicu error (ValueError / Result::Err).",
+  "cases": [
+    {
+      "id": "edge-001",
+      "description": "N terlalu kecil (harus >= 4)",
+      "params": {
+        "n": 2,
+        "seed": "test",
+        "q": "1000000007"
+      },
+      "input": {
+        "plaintext": "1",
+        "blinding": "1"
+      },
+      "expected": {
+        "error": "n must be >= 4"
+      }
+    },
+    {
+      "id": "edge-002",
+      "description": "Modulus q negatif (tidak valid)",
+      "params": {
+        "n": 10,
+        "seed": "test",
+        "q": "-1000000007"
+      },
+      "input": {
+        "plaintext": "1",
+        "blinding": "1"
+      },
+      "expected": {
+        "error": "q must be positive"
+      }
+    }
+  ]
 }
