@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "tier": "B",
+  "description": "Basic round-trip test vectors (Tier B)",
+  "cases": [
+    {
+      "id": "basic-001",
+      "params": { "n": 10, "seed": "fcr-rsa-demo-seed", "q": "1000000007" },
+      "input": { "plaintext": "42", "blinding": "12345" },
+      "expected": { "decrypted": "42" }
+    }
+  ]
+}

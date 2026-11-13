@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fcr-rsa"
+version = "0.1.0"
+description = "FCR-RSA: post-quantum cryptographic protocol prototype (research)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Duhemen (emen)" }]
+keywords = ["cryptography", "post-quantum", "fibonacci", "research"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Security :: Cryptography",
+    "Development Status :: 2 - Pre-Alpha",
+]
+
+[project.urls]
+Repository = "https://github.com/duhemen/fcr-rsa"
+
+[tool.setuptools]
+packages = ["fcr_rsa"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

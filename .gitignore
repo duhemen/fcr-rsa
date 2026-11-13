@@ -1,0 +1,48 @@
+﻿# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+*.png.tmp
+*.pdf
+build/
+dist/
+
+# Secrets (JANGAN PERNAH commit ini)
+*.pem
+*.key
+*.p12
+.env
+.env.*
+secrets/
+
+# Virtual Environments
+venv/
+.venv/
+fcr-python/venv/
+
+# Virtual Environments
+venv/
+.venv/
+fcr-python/venv/

@@ -1,0 +1,27 @@
+[package]
+name = "fcr-rsa"
+version = "0.1.0"
+edition = "2021"
+description = "FCR-RSA: post-quantum cryptographic protocol prototype (research)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/duhemen/fcr-rsa"
+readme = "README.md"
+keywords = ["cryptography", "post-quantum", "fibonacci", "research"]
+categories = ["cryptography"]
+
+[dependencies]
+num-bigint = "0.4"
+num-traits = "0.2"
+num-complex = "0.4"
+sha2 = "0.10"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[lib]
+name = "fcr_rsa"
+path = "src/lib.rs"
+
+[[bench]]
+name = "encrypt_bench"
+harness = false

@@ -1,0 +1,6 @@
+{
+  "version": "1.0",
+  "tier": "mixed",
+  "description": "Edge cases: empty, N=0, overflow (placeholder)",
+  "cases": []
+}
