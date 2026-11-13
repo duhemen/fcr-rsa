@@ -182,6 +182,7 @@ fcr-rsa/
 │   └── benches/encrypt_bench.rs
 │
 ├── fcr-python/            # Implementasi Python (paket)
+│   ├── fcr-pyo3/
 │   ├── fcr_rsa/
 │   │   ├── core_math.py
 │   │   ├── tier_a.py
@@ -252,10 +253,22 @@ Decrypted : 42
 Round-trip OK
 
 3 passed
+
+### Rust via Python (PyO3 - Super Cepat)
+
+Jika Anda ingin menggunakan kecepatan *native* Rust langsung dari Python:
+
+```bash
+cd fcr-pyo3
+pip install maturin
+maturin develop
+python py.py
+
 ```
 
 > **Catatan:** Ciphertext `722957369` identik antara Rust dan Python
 > untuk parameter uji yang sama. Ini bukti konsistensi lintas-bahasa.
+> **Yang di harapkan** Rust (via Python) Ciphertext: 758780528,  Decrypted: 42
 
 ---
 
