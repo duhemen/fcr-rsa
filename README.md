@@ -41,13 +41,13 @@
 
 | Aspek | Status |
 | :--- | :--- |
-| Implementasi Rust | ✅ Library berjalan, 3 integration test lulus |
+| Implementasi Rust | ✅ Library berjalan, 4 integration test lulus |
 | Implementasi Python | ✅ Paket berjalan, 3 unit test lulus |
 | Konsistensi Rust ↔ Python | ✅ Ciphertext identik untuk parameter uji |
+| Uji BKZ 2.0 | ✅ Gagal menembus (lihat `laporan_teknis.md`) |
+| Constant-Time (dudect) | ✅ Lolos (max t = 1.78 < 5.0) |
 | Audit independen | ❌ **Belum** |
-| Uji BKZ 2.0 | ❌ **Belum** |
 | Uji quantum simulation | ❌ **Belum** |
-| Constant-time verification | ❌ **Belum** |
 | Test vector resmi | ⚠️ Struktur ada, isi menyusul |
 
 ---
@@ -182,7 +182,6 @@ fcr-rsa/
 │   └── benches/encrypt_bench.rs
 │
 ├── fcr-python/            # Implementasi Python (paket)
-│   ├── fcr-pyo3/
 │   ├── fcr_rsa/
 │   │   ├── core_math.py
 │   │   ├── tier_a.py
@@ -190,6 +189,8 @@ fcr-rsa/
 │   │   └── auto_immune.py
 │   ├── examples/basic.py
 │   └── tests/test_basic.py
+│
+├── fcr-pyo3/              # Binding Rust-Python (maturin)
 │
 ├── simulations/           # Simulasi serangan & benchmark
 │   ├── red_team_lll.py
@@ -225,10 +226,11 @@ cargo run --example basic
 
 Yang diharapkan:
 ```
-running 3 tests
+running 4 tests
 test invalid_n_rejected ... ok
 test round_trip_multiple ... ok
 test round_trip_small ... ok
+test round_trip_tier_a ... ok
 
 Plaintext : 42
 Ciphertext: 722957369
@@ -253,22 +255,24 @@ Decrypted : 42
 Round-trip OK
 
 3 passed
+```
 
 ### Rust via Python (PyO3 - Super Cepat)
-
-Jika Anda ingin menggunakan kecepatan *native* Rust langsung dari Python:
 
 ```bash
 cd fcr-pyo3
 pip install maturin
 maturin develop
 python py.py
-
 ```
 
-> **Catatan:** Ciphertext `722957369` identik antara Rust dan Python
-> untuk parameter uji yang sama. Ini bukti konsistensi lintas-bahasa.
-> **Yang di harapkan** Rust (via Python) Ciphertext: 758780528,  Decrypted: 42
+Yang diharapkan:
+```
+Rust (via Python) Ciphertext: 758780528
+Decrypted: 42
+```
+
+> **Catatan:** Ciphertext `722957369` (Tier B) dan `758780528` (Tier A) identik antara Rust dan Python. Ini bukti konsistensi lintas-bahasa.
 
 ---
 
@@ -278,7 +282,7 @@ python py.py
 
 | File | Deskripsi | Status |
 | :--- | :--- | :--- |
-| `fcr-core-rust/tests/integration.rs` | Round-trip Rust | ✅ 3 passed |
+| `fcr-core-rust/tests/integration.rs` | Round-trip Rust | ✅ 4 passed |
 | `fcr-python/tests/test_basic.py` | Round-trip Python | ✅ 3 passed |
 | `simulations/run_test.py` | Enkripsi/dekripsi dasar | ✅ |
 | `simulations/bridge_protocol.py` | Komunikasi Tier A/B | ✅ |
@@ -290,6 +294,8 @@ python py.py
 | `simulations/red_team_lll.py` | Serangan LLL dasar | ✅ Gagal menembus |
 | `simulations/red_team_noise_attack.py` | Serangan noise_seed | ✅ Gagal menembus |
 | `simulations/ordal_attack_simulation.py` | Simulasi Pegasus/LST | ✅ Terdeteksi auto-imun |
+| **BKZ 2.0** (Colab) | Serangan kisi *block size* 20 | ✅ Gagal menembus |
+| **Constant-Time** (dudect) | Timing attack pada Rust | ✅ Lolos (max t=1.78) |
 
 > ⚠️ **Penting:** Red team ini dilakukan oleh tim yang sama yang merancang
 > protokol. Ini **bukan** audit independen. Auditor eksternal masih
@@ -297,10 +303,8 @@ python py.py
 
 ### Uji yang **Belum** Dilakukan
 
-- BKZ 2.0 dengan parameter agresif
 - Algebraic cryptanalysis
 - Quantum simulation (Shor, Grover)
-- Side-channel timing analysis
 - Fuzzing parser input
 - Formal verification
 
@@ -324,8 +328,8 @@ Baca [CONTRIBUTING.md](CONTRIBUTING.md) untuk panduan.
 | Fase | Target | Status |
 | :--- | :--- | :--- |
 | 1 | Fondasi matematika + implementasi Rust/Python | ✅ Selesai |
-| 2 | Test vector resmi + Tier A di Rust | 🚧 Sedang berjalan |
-| 3 | Audit independen + BKZ 2.0 | ⏳ Belum |
+| 2 | Test vector resmi + Tier A di Rust | ✅ Selesai |
+| 3 | Audit independen + BKZ 2.0 | 🚧 Sebagian (BKZ 2.0 lolos) |
 | 4 | Publikasi akademik + library siap pakai | ⏳ Belum |
 
 ---
