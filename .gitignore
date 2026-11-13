@@ -46,3 +46,8 @@ fcr-python/venv/
 venv/
 .venv/
 fcr-python/venv/
+
+fcr-pyo3/target/
+fcr-pyo3/*.so
+fcr-pyo3/*.pyd
+fcr-pyo3/*.dll
