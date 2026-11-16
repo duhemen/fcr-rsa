@@ -11,8 +11,7 @@ fn main() {
     let msg = BigInt::from_u64(42).unwrap();
 
     println!("Plaintext : {}", msg);
-    let ct = encrypt(&msg, seed, n, &q, &blinding).expect("encrypt");
-    println!("Ciphertext: {}", ct);
+    let ct = encrypt(&msg, seed, n, &q).expect("encrypt");
     let pt = decrypt(&ct, seed, n, &q, &blinding).expect("decrypt");
     println!("Decrypted : {}", pt);
     assert_eq!(msg, pt, "round-trip failed");

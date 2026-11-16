@@ -12,9 +12,9 @@ fn bench_round_trip(c: &mut Criterion) {
     let m = BigInt::from_u64(42).unwrap();
 
     c.bench_function("encrypt_n100", |bench| {
-        bench.iter(|| encrypt(&m, seed, n, &q, &b).unwrap())
+        bench.iter(|| encrypt(&m, seed, n, &q).unwrap())
     });
-    let ct = encrypt(&m, seed, n, &q, &b).unwrap();
+    let ct = encrypt(&m, seed, n, &q).unwrap();
     c.bench_function("decrypt_n100", |bench| {
         bench.iter(|| decrypt(&ct, seed, n, &q, &b).unwrap())
     });

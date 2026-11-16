@@ -16,5 +16,5 @@ pub mod encrypt;
 pub mod decrypt;
 pub mod red_team;
 
-pub use encrypt::{encrypt, encrypt_tier_a};
+pub use encrypt::{encrypt, encrypt_with_blinding, encrypt_tier_a, encrypt_tier_a_with_blinding};
 pub use decrypt::{decrypt, decrypt_tier_a};
