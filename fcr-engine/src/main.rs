@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use fcr_rsa::{encrypt, encrypt_with_blinding, encrypt_tier_a, encrypt_tier_a_with_blinding, decrypt, decrypt_tier_a};
+use fcr_rsa::{encrypt_with_blinding, encrypt_tier_a_with_blinding, decrypt, decrypt_tier_a};
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, ToPrimitive};
 use sqlx::postgres::PgPoolOptions;
@@ -18,8 +18,7 @@ struct Cli {
 enum Commands {
     /// Generate a new key and save it to PostgreSQL
     Keygen {
-        /// Nama unik untuk kunci ini
-        #[arg(short = 'N', long)] // Pakai 'N' besar untuk nama
+        #[arg(short = 'N', long)]
         name: String,
         #[arg(short, long, default_value = "fcr-rsa-demo-seed")]
         seed: String,
@@ -32,29 +31,31 @@ enum Commands {
     ListKeys,
     /// Encrypt a plaintext message
     Encrypt {
-        #[arg(short = 'm', long)] // Pakai 'm' untuk message (teks)
+        #[arg(short = 'm', long)]
         text: String,
-        #[arg(short = 'k', long)] // Pakai 'k' untuk keyname
+        #[arg(short = 'k', long)]
         keyname: String,
-        #[arg(short = 'b', long)] // Pakai 'b' untuk blinding
+        /// (Opsional) Jika tidak diisi, akan menggunakan mode acak (IND-CPA)
+        #[arg(short = 'b', long)]
         blinding: Option<String>,
-        #[arg(short = 't', long, default_value = "b")] // Pakai 't' untuk tier
+        #[arg(short = 't', long, default_value = "b")]
         tier: String,
     },
     /// Decrypt a ciphertext message
     Decrypt {
-        #[arg(short = 'c', long)] // Pakai 'c' untuk ciphertext
+        /// Ciphertext (Format: BLINDING:CT1,CT2,... atau CT1,CT2,...)
+        #[arg(short = 'c', long)]
         ciphertext: String,
-        #[arg(short = 'k', long)] // Pakai 'k' untuk keyname
+        #[arg(short = 'k', long)]
         keyname: String,
-        #[arg(short = 'b', long)] // Pakai 'b' untuk blinding
-        blinding: String,
-        #[arg(short = 't', long, default_value = "b")] // Pakai 't' untuk tier
+        /// (Opsional) Hanya diperlukan jika ciphertext tidak menyertakan blinding
+        #[arg(short = 'b', long)]
+        blinding: Option<String>,
+        #[arg(short = 't', long, default_value = "b")]
         tier: String,
     },
 }
 
-// Struct untuk menampung hasil query
 #[derive(sqlx::FromRow)]
 struct KeyRecord {
     seed: String,
@@ -67,7 +68,6 @@ async fn main() {
     dotenvy::dotenv().ok();
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env");
 
-    // Buat koneksi pool ke PostgreSQL
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
@@ -78,7 +78,6 @@ async fn main() {
 
     match &cli.command {
         Commands::Keygen { name, seed, n, q } => {
-            // Simpan ke database
             sqlx::query(
                 "INSERT INTO keys (name, seed, n, q) VALUES ($1, $2, $3, $4)
                  ON CONFLICT (name) DO UPDATE SET seed = $2, n = $3, q = $4"
@@ -107,7 +106,6 @@ async fn main() {
         }
         
         Commands::Encrypt { text, keyname, blinding, tier } => {
-            // Ambil kunci dari database
             let record: KeyRecord = sqlx::query_as("SELECT seed, n, q FROM keys WHERE name = $1")
                 .bind(keyname)
                 .fetch_one(&pool)
@@ -118,30 +116,43 @@ async fn main() {
             let seed_bytes = record.seed.as_bytes();
             let n_val = record.n as usize;
             let is_tier_a = tier.to_lowercase() == "a";
-            let b_big = blinding.as_ref().map(|b| BigInt::from_str(b).expect("Invalid blinding"));
 
+            // LOGIKA BARU: Tentukan blinding
+            let (b_str_to_use, is_random) = match blinding {
+                Some(b) => (b.clone(), false),
+                None => {
+                    // Generate random blinding. Kita gunakan angka acak dari 1..1_000_000_000
+                    // (Di produksi, ini harus menggunakan OsRng, tapi kita simulasikan dengan time)
+                    let random_val = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .subsec_nanos() as u64;
+                    let random_b = (random_val % 1_000_000_000).to_string();
+                    (random_b, true)
+                }
+            };
+
+            let b_big = BigInt::from_str(&b_str_to_use).expect("Invalid blinding");
             let mut ciphertexts = Vec::new();
 
             for byte in text.as_bytes() {
                 let m_big = BigInt::from_u8(*byte).unwrap();
-                let ct = if let Some(ref b) = b_big {
-                    if is_tier_a {
-                        encrypt_tier_a_with_blinding(&m_big, seed_bytes, n_val, &q_big, b).expect("Encryption failed")
-                    } else {
-                        encrypt_with_blinding(&m_big, seed_bytes, n_val, &q_big, b).expect("Encryption failed")
-                    }
+                let ct = if is_tier_a {
+                    encrypt_tier_a_with_blinding(&m_big, seed_bytes, n_val, &q_big, &b_big).expect("Encryption failed")
                 } else {
-                    if is_tier_a {
-                        encrypt_tier_a(&m_big, seed_bytes, n_val, &q_big).expect("Encryption failed")
-                    } else {
-                        encrypt(&m_big, seed_bytes, n_val, &q_big).expect("Encryption failed")
-                    }
+                    encrypt_with_blinding(&m_big, seed_bytes, n_val, &q_big, &b_big).expect("Encryption failed")
                 };
                 ciphertexts.push(ct.to_string());
             }
 
             println!("Plaintext  : {}", text);
-            println!("Ciphertext (Tier {}): {}", tier.to_uppercase(), ciphertexts.join(","));
+            if is_random {
+                // Format baru: BLINDING:CT1,CT2,...
+                println!("Ciphertext (Tier {}): {}:{}", tier.to_uppercase(), b_str_to_use, ciphertexts.join(","));
+            } else {
+                // Format lama: CT1,CT2,... (karena user memberikan blinding manual)
+                println!("Ciphertext (Tier {}): {}", tier.to_uppercase(), ciphertexts.join(","));
+            }
         }
         
         Commands::Decrypt { ciphertext, keyname, blinding, tier } => {
@@ -152,12 +163,27 @@ async fn main() {
                 .expect("Kunci tidak ditemukan di database");
 
             let q_big = BigInt::from_str(&record.q).expect("Invalid Q");
-            let b_big = BigInt::from_str(blinding).expect("Invalid blinding");
             let seed_bytes = record.seed.as_bytes();
             let n_val = record.n as usize;
             let is_tier_a = tier.to_lowercase() == "a";
 
-            let ct_strings: Vec<&str> = ciphertext.split(',').collect();
+            // LOGIKA BARU: Parsing format ciphertext
+            let (b_str_to_use, ct_part) = if let Some(b) = blinding {
+                // Jika user memberikan --blinding, gunakan itu (format lama)
+                (b.clone(), ciphertext.clone())
+            } else {
+                // Jika tidak, coba parsing format baru (BLINDING:CT1,CT2,...)
+                let parts: Vec<&str> = ciphertext.split(':').collect();
+                if parts.len() == 2 {
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    eprintln!("❌ Error: Format ciphertext tidak valid. Harap sertakan --blinding atau gunakan format BLINDING:CT...");
+                    return;
+                }
+            };
+
+            let b_big = BigInt::from_str(&b_str_to_use).expect("Invalid blinding");
+            let ct_strings: Vec<&str> = ct_part.split(',').collect();
             let mut decrypted_bytes = Vec::new();
 
             for ct_str in ct_strings {
