@@ -301,12 +301,30 @@ Decrypted: 42
 > protokol. Ini **bukan** audit independen. Auditor eksternal masih
 > dibutuhkan sebelum klaim keamanan bisa dianggap valid.
 
+### FCR-Engine (CLI & Database)
+Kami telah membangun *Command Line Interface* (CLI) yang terhubung ke PostgreSQL untuk manajemen kunci.
+
+```bash
+# 1. Setup Database (PostgreSQL)
+psql -U postgres -c "CREATE DATABASE fcr_rsa;"
+# (Lihat fcr-engine/README.md untuk skema tabel)
+
+# 2. Buat Kunci
+cargo run -- keygen --name "kunci_utama"
+
+# 3. Enkripsi Teks (Otomatis IND-CPA)
+cargo run -- encrypt --text "Halo Dunia" --keyname "kunci_utama"
+
+# 4. Dekripsi (Tanpa perlu blinding manual)
+cargo run -- decrypt --ciphertext "BLINDING:CT..." --keyname "kunci_utama"
+```
+
 ### Uji yang **Belum** Dilakukan
 
-- Algebraic cryptanalysis
-- Quantum simulation (Shor, Grover)
-- Fuzzing parser input
-- Formal verification
+- Algebraic cryptanalysis (Groebner basis, linearisasi)
+- Fuzzing parser input (input malformed pada CLI)
+- Formal verification (verifikasi matematis)
+- Audit keamanan independen (pihak ketiga)
 
 ---
 
