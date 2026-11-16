@@ -56,3 +56,5 @@ Thumbs.db
 *.key
 *.pem
 secrets/
+# Catatan pribadi
+coretan.md
