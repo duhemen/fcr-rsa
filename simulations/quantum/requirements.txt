@@ -1,0 +1,17 @@
+# Dependensi untuk simulasi kuantum FCR-RSA
+# Install: pip install -r requirements.txt
+
+# Qiskit (IBM Quantum SDK)
+qiskit>=1.0,<2.0
+qiskit-aer>=0.14
+
+# Visualisasi
+matplotlib>=3.7
+numpy>=1.24,<2.0
+
+# Jupyter (untuk notebook lokal)
+jupyter>=1.0
+notebook>=7.0
+
+# Catatan: Untuk Colab, qiskit sudah tersedia via:
+#   !pip install qiskit qiskit-aer
