@@ -1,56 +1,48 @@
 # FCR-RSA Engine CLI
 
-Command Line Interface (CLI) untuk protokol FCR-RSA. 
-
-> ⚠️ **RESEARCH PROTOTYPE — NOT PRODUCTION READY.**
-> Jangan gunakan untuk data sensitif. Lihat [../LIMITATIONS.md](../LIMITATIONS.md).
+Engine *Command Line* untuk protokol FCR-RSA. Terhubung ke PostgreSQL untuk manajemen kunci dan mendukung enkripsi teks nyata.
 
 ## Fitur
-- **Tier B**: Mode ringan untuk IoT/Mobile.
-- **Tier A**: Mode berat untuk Server (dengan `N_comp`).
-- **Random Blind**: Mode produksi (IND-CPA aman).
-- **Deterministic**: Mode uji (dengan *blinding* manual).
+- **PostgreSQL Key Management**: Simpan dan kelola kunci di database.
+- **Text I/O**: Enkripsi teks (Base-256 per byte).
+- **IND-CPA (Auto-Embedding)**: *Blinding factor* acak disematkan otomatis ke *ciphertext*.
+- **Tier A & B**: Mendukung mode enterprise (A) dan mobile (B).
 
-## Cara Build
-```bash
-cd fcr-engine
-cargo build --release
+## Prasyarat
+- Rust (Cargo)
+- PostgreSQL (berjalan di port 5432)
+- Database bernama `fcr_rsa` dengan tabel:
+  ```sql
+  CREATE TABLE keys (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) UNIQUE NOT NULL,
+      seed TEXT NOT NULL,
+      n INTEGER NOT NULL,
+      q TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ```
+
+## Setup
+Buat file `.env` di folder ini:
+```env
+DATABASE_URL=postgres://postgres:PASSWORD_ANDA@127.0.0.1:5432/fcr_rsa
 ```
 
 ## Cara Penggunaan
 
-### 1. Enkripsi (Mode Acak / Produksi)
+**1. Buat Kunci Baru**
 ```bash
-cargo run -- encrypt --message 42
-```
-*(Hasil ciphertext akan berubah setiap kali dijalankan)*
-
-### 2. Enkripsi & Dekripsi (Mode Deterministik Tier B)
-```bash
-# Enkripsi
-cargo run -- encrypt --message 42 --blinding 12345
-
-# Dekripsi (Gunakan ciphertext yang didapat)
-cargo run -- decrypt --ciphertext 722957369 --blinding 12345
+cargo run -- keygen --name "kunci_utama"
 ```
 
-### 3. Enkripsi & Dekripsi (Mode Deterministik Tier A)
+**2. Enkripsi Teks**
 ```bash
-# Enkripsi
-cargo run -- encrypt --message 42 --blinding 12345 --tier a
-
-# Dekripsi
-cargo run -- decrypt --ciphertext 758780528 --blinding 12345 --tier a
+cargo run -- encrypt --text "Halo Dunia" --keyname "kunci_utama"
+# Output: BLINDING:CT1,CT2,...
 ```
 
-### 4. Enkripsi Teks Nyata (Fase 6)
+**3. Dekripsi Teks**
 ```bash
-# Enkripsi
-cargo run -- encrypt --text "Halo Dunia" --blinding 12345
-# Output: 96489521,574432988,...
-
-# Dekripsi (Gunakan deretan angka dari output di atas)
-cargo run -- decrypt --ciphertext 96489521,574432988,... --blinding 12345
+cargo run -- decrypt --ciphertext "BLINDING:CT1,CT2,..." --keyname "kunci_utama"
 # Output: Halo Dunia
-```
-*(Catatan: Karena kita menggunakan mode ECB per-byte, teks panjang akan menghasilkan deretan angka yang dipisahkan koma).*
