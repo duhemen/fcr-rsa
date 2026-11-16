@@ -1,0 +1,14 @@
+# Dependensi untuk simulasi FCR-RSA
+# Install: pip install -r requirements.txt
+
+# Core scientific
+numpy>=1.24,<2.0
+scipy>=1.10
+matplotlib>=3.7
+
+# Lattice reduction (LLL/BKZ)
+# ⚠️ fpylll TIDAK tersedia untuk Windows. Lihat simulations/bkz/README.md
+# fpylll>=0.6.0
+
+# Opsional: untuk visualisasi 3D
+# plotly>=5.15

@@ -15,20 +15,26 @@ Folder ini berisi skrip untuk mensimulasikan serangan (Red Team) dan mengukur pe
 
 ## 📂 Daftar Simulasi
 
-| File | Deskripsi | Tipe |
-| :--- | :--- | :--- |
-| `run_test.py` | Uji dasar enkripsi dan dekripsi | Defensif |
-| `bridge_protocol.py` | Simulasi komunikasi dan *handshake* antara Tier A & Tier B | Defensif |
-| `stress_test.py` | Pengujian beban tinggi dan konsistensi *BigInt* | Performa |
-| `red_team_lll.py` | Simulasi serangan Lattice Reduction (LLL) dasar | Ofensif |
-| `red_team_noise_attack.py` | Simulasi serangan brute-force terhadap `noise_seed` | Ofensif |
-| `ordal_attack_simulation.py` | Simulasi skenario pencurian kunci (Pegasus/LST) & respons Auto-Imun | Ofensif |
-| `visualize_attack.py` | Visualisasi sebaran *noise* dan kegagalan LLL | Analisis |
+| File | Deskripsi | Tipe | Platform |
+| :--- | :--- | :--- | :--- |
+| `run_test.py` | Uji dasar enkripsi dan dekripsi | Defensif | Semua |
+| `bridge_protocol.py` | Simulasi *handshake* Tier A & Tier B | Defensif | Semua |
+| `stress_test.py` | Uji beban tinggi dan konsistensi *BigInt* | Performa | Semua |
+| `red_team_lll.py` | Serangan Lattice Reduction (LLL) dasar | Ofensif | Semua |
+| `red_team_noise_attack.py` | Serangan brute-force terhadap `noise_seed` | Ofensif | Semua |
+| `ordal_attack_simulation.py` | Skenario Pegasus/LST & respons Auto-Imun | Ofensif | Semua |
+| `visualize_attack.py` | Visualisasi sebaran *noise* & kegagalan LLL | Analisis | Semua |
+| `bkz/bkz_attack.py` | **BKZ 2.0** lattice attack | Ofensif | **Linux/Colab** ⚠️ |
+
+## ⚠️ Catatan: BKZ 2.0 Hanya Bisa Jalan di Linux/Colab
+
+`fpylll` (library untuk LLL/BKZ) **tidak tersedia untuk Windows** (tidak ada wheel resmi; kompilasi butuh GMP). Karena itu, **BKZ 2.0 dijalankan di Google Colab** (Linux), bukan di Windows lokal.
+
+Lihat [`bkz/README.md`](bkz/README.md) untuk instruksi lengkap.
 
 ## 🖼️ Aset Visual
 
-Semua grafik dan hasil visualisasi benchmark disimpan di dalam folder `assets/`. 
-*(Contoh: `hasil_benchmark_fcr_rsa.png`, `hasil_visualisasi_lll.png`)*
+Semua grafik dan hasil visualisasi benchmark disimpan di dalam folder `assets/`.
 
 ## ⚡ Cara Menjalankan
 
@@ -38,21 +44,32 @@ Pastikan dependensi Python sudah terinstal (terutama `numpy`, `matplotlib`, dan 
 pip install -r requirements.txt
 ```
 
-Jalankan skrip simulasi dari direktori *root* repositori (bukan dari dalam folder `simulations/`):
+## 🐧 Menjalankan BKZ di Colab (Linux)
 
-```bash
-# Contoh menjalankan uji LLL
-python simulations/red_team_lll.py
-
-# Contoh menjalankan uji fungsionalitas dasar
-python simulations/run_test.py
-```
+1. Buka [colab.research.google.com](https://colab.research.google.com)
+2. Upload `simulations/bkz/bkz_attack.ipynb` (atau *copy* isi `bkz_attack.py` ke sel baru)
+3. Jalankan: `!pip install fpylll` (sel pertama)
+4. Runtime → Run all
+5. Lihat output: harusnya berakhir dengan `[KESIMPULAN] ❌ BKZ 2.0 GAGAL menemukan pesan asli (M)`
 
 ## 📊 Hasil yang Diharapkan
 
 - **Uji Defensif:** Menghasilkan pesan dekripsi yang sama persis dengan pesan asli (*Round-trip OK*).
-- **Uji Ofensif (Red Team):** Algoritma LLL dan Noise Attack diharapkan **gagal** menemukan kunci, membuktikan bahwa distorsi *noise* LWE bekerja pada parameter uji saat ini.
-- **Visualisasi:** Menghasilkan plot grafik yang menunjukkan kekacauan (*chaos*) dari deret Fibonacci non-linear.
+- **Uji Ofensif (Red Team):** Algoritma LLL, Noise Attack, dan BKZ 2.0 diharapkan **gagal** menemukan kunci.
+- **Visualisasi:** Menghasilkan plot grafik yang menunjukkan kekacauan (*chaos*) deret Fibonacci non-linear.
+
+## 📋 Status Jujur per-File
+
+| File | Bisa Dijalankan? | Bukti Output |
+| :--- | :--- | :--- |
+| `run_test.py` | ✅ | Round-trip OK |
+| `bridge_protocol.py` | ✅ | Handshake OK |
+| `stress_test.py` | ✅ | BigInt konsisten |
+| `red_team_lll.py` | ✅ | LLL gagal menembus |
+| `red_team_noise_attack.py` | ✅ | Noise attack gagal |
+| `ordal_attack_simulation.py` | ✅ | LOCKDOWN terpicu |
+| `visualize_attack.py` | ✅ | Grafik chaos |
+| `bkz/bkz_attack.py` | ✅ (Linux/Colab) | BKZ gagal menembus |
 
 ---
 

@@ -1,53 +1,58 @@
-﻿# Rust
-/target/
+﻿# === Rust ===
+target/
 **/target/
-Cargo.lock.bak
+Cargo.lock
 
-# Python
+# === Python ===
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
 *.egg-info/
-.venv/
+.eggs/
 venv/
+.venv/
+env/
+ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# OS
-.DS_Store
-Thumbs.db
+# === Maturin / PyO3 ===
+fcr-pyo3/target/
+*.pyd
+*.pyd.*
 
-# Editor
+# === IDE ===
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Build artifacts
-*.png.tmp
-*.pdf
-build/
-dist/
+# === OS ===
+.DS_Store
+Thumbs.db
 
-# Secrets (JANGAN PERNAH commit ini)
-*.pem
-*.key
-*.p12
+# === Logs & temp ===
+*.log
+*.tmp
+*.bak
+
+# === Data besar (kalau ada) ===
+*.bin
+*.dat
+# (kecuali test vector — jangan ignore ini)
+!test-vectors/**/*.json
+!simulations/assets/**/*.png
+!simulations/assets/**/*.svg
+
+# === Secrets (JANGAN pernah commit) ===
 .env
-.env.*
+.env.local
+*.key
+*.pem
 secrets/
-
-# Virtual Environments
-venv/
-.venv/
-fcr-python/venv/
-
-# Virtual Environments
-venv/
-.venv/
-fcr-python/venv/
-
-fcr-pyo3/target/
-fcr-pyo3/*.so
-fcr-pyo3/*.pyd
-fcr-pyo3/*.dll

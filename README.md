@@ -79,7 +79,7 @@
 - 🎯 **[Threat Model](docs/threat-model.md)** — Apa yang dilawan, apa yang tidak.
 - ⚠️ **[Limitasi](LIMITATIONS.md)** — **Wajib dibaca** sebelum menggunakan.
 - 🔒 **[Security Policy](SECURITY.md)** — Cara melaporkan celah.
-
+- 📜 **[Session Log v0.1.1](docs/SESSION_LOG_v0.1.1.md)** — Catatan pengembangan 13 Nov 2026.
 ---
 
 ## 💡 1. Latar Belakang
@@ -294,7 +294,7 @@ Decrypted: 42
 | `simulations/red_team_lll.py` | Serangan LLL dasar | ✅ Gagal menembus |
 | `simulations/red_team_noise_attack.py` | Serangan noise_seed | ✅ Gagal menembus |
 | `simulations/ordal_attack_simulation.py` | Simulasi Pegasus/LST | ✅ Terdeteksi auto-imun |
-| **BKZ 2.0** (Colab) | Serangan kisi *block size* 20 | ✅ Gagal menembus |
+| **BKZ 2.0** (`simulations/bkz/`) | Serangan kisi, block size 20 | ✅ Gagal menembus (di Colab) |
 | **Constant-Time** (dudect) | Timing attack pada Rust | ✅ Lolos (max t=1.78) |
 
 > ⚠️ **Penting:** Red team ini dilakukan oleh tim yang sama yang merancang

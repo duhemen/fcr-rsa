@@ -29,10 +29,11 @@
 
 ## 4. Yang TIDAK Dilawan (Saat Ini)
 
-- **BKZ 2.0** dengan parameter agresif — belum diuji
+- **BKZ 2.0 dengan parameter besar (matriks > 10×10)** — belum diuji.
+  *Catatan: BKZ 2.0 dengan matriks 3×3 dan `Q = 10^9` sudah diuji (13 Nov 2026), gagal menembus. Lihat `simulations/bkz/`.*
 - **Algebraic cryptanalysis** — belum diuji
-- **Quantum simulation** — belum diuji
-- **Side-channel timing** — implementasi Rust belum constant-time
+- **Quantum simulation (Shor, Grover)** — belum diuji (Fase 4A)
+- **Side-channel timing pada Tier A** — implementasi Rust Tier A belum constant-time
 - **Fault injection** — belum diuji
 - **Supply chain attack** — belum ada mitigasi
 - **Insider dengan akses sah** — di luar cakupan protokol
