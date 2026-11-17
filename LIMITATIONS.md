@@ -132,5 +132,5 @@ Auto-Mune saat ini berpotensi menyimpan data lokasi (`X-FCR-GPS-Lat`, `X-FCR-GPS
 
 ---
 
-**Terakhir diperbarui:** 13 November 2026
+**Terakhir diperbarui:** 17 November 2026
 **Versi:** 0.1.0-research
