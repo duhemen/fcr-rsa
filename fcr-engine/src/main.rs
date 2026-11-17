@@ -1,214 +1,198 @@
-use clap::{Parser, Subcommand};
-use fcr_rsa::{encrypt_with_blinding, encrypt_tier_a_with_blinding, decrypt, decrypt_tier_a};
-use num_bigint::BigInt;
-use num_traits::{FromPrimitive, ToPrimitive};
-use sqlx::postgres::PgPoolOptions;
-use std::str::FromStr;
+//! FCR-RSA Engine: CLI + REST API (Research Prototype).
+//!
+//! Subcommand:
+//! - `keygen`, `list-keys`, `encrypt`, `decrypt` — operasi CLI klasik
+//! - `apikey create|list|revoke` — manajemen API key
+//! - `serve` — jalankan REST API server
 
-#[derive(Parser)]
-#[command(name = "fcr-engine")]
-#[command(version = "0.1.0")]
-#[command(about = "FCR-RSA Command Line Engine (Research Prototype)", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
+mod api;
+mod cli;
+mod crypto;
+mod db;
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Generate a new key and save it to PostgreSQL
-    Keygen {
-        #[arg(short = 'N', long)]
-        name: String,
-        #[arg(short, long, default_value = "fcr-rsa-demo-seed")]
-        seed: String,
-        #[arg(short = 'i', long, default_value_t = 10)]
-        n: usize,
-        #[arg(short = 'q', long, default_value = "1000000007")]
-        q: String,
-    },
-    /// List all keys in the database
-    ListKeys,
-    /// Encrypt a plaintext message
-    Encrypt {
-        #[arg(short = 'm', long)]
-        text: String,
-        #[arg(short = 'k', long)]
-        keyname: String,
-        /// (Opsional) Jika tidak diisi, akan menggunakan mode acak (IND-CPA)
-        #[arg(short = 'b', long)]
-        blinding: Option<String>,
-        #[arg(short = 't', long, default_value = "b")]
-        tier: String,
-    },
-    /// Decrypt a ciphertext message
-    Decrypt {
-        /// Ciphertext (Format: BLINDING:CT1,CT2,... atau CT1,CT2,...)
-        #[arg(short = 'c', long)]
-        ciphertext: String,
-        #[arg(short = 'k', long)]
-        keyname: String,
-        /// (Opsional) Hanya diperlukan jika ciphertext tidak menyertakan blinding
-        #[arg(short = 'b', long)]
-        blinding: Option<String>,
-        #[arg(short = 't', long, default_value = "b")]
-        tier: String,
-    },
-}
-
-#[derive(sqlx::FromRow)]
-struct KeyRecord {
-    seed: String,
-    n: i32,
-    q: String,
-}
+use clap::Parser;
+use cli::{ApikeyAction, Cli, Commands};
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     dotenvy::dotenv().ok();
-    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env");
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&db_url)
-        .await
-        .expect("Failed to connect to PostgreSQL");
+    // Init tracing (untuk log request API)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tower_http=debug".into()),
+        )
+        .init();
+
+    let db_url = match std::env::var("DATABASE_URL") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("❌ DATABASE_URL must be set in .env");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let pool = match db::connect_pool(&db_url).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ Gagal koneksi ke PostgreSQL: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     let cli = Cli::parse();
 
-    match &cli.command {
+    match cli.command {
+        // ===== CLI klasik =====
         Commands::Keygen { name, seed, n, q } => {
-            sqlx::query(
-                "INSERT INTO keys (name, seed, n, q) VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (name) DO UPDATE SET seed = $2, n = $3, q = $4"
-            )
-            .bind(name)
-            .bind(seed)
-            .bind(*n as i32)
-            .bind(q)
-            .execute(&pool)
-            .await
-            .expect("Gagal menyimpan kunci ke database");
-
-            println!("✅ Kunci '{}' berhasil disimpan ke PostgreSQL.", name);
-        }
-
-        Commands::ListKeys => {
-            let records = sqlx::query_as::<_, KeyRecord>("SELECT seed, n, q FROM keys")
-                .fetch_all(&pool)
-                .await
-                .expect("Gagal mengambil daftar kunci");
-            
-            println!("📋 Daftar Kunci di Database:");
-            for (i, r) in records.iter().enumerate() {
-                println!("{}. Seed: {}, N: {}, Q: {}", i+1, r.seed, r.n, r.q);
+            if n < 4 {
+                eprintln!("❌ n harus >= 4");
+                return ExitCode::FAILURE;
+            }
+            match db::upsert_key(&pool, &name, &seed, n as i32, &q).await {
+                Ok(_) => println!("✅ Kunci '{}' berhasil disimpan ke PostgreSQL.", name),
+                Err(e) => {
+                    eprintln!("❌ Gagal menyimpan kunci: {}", e);
+                    return ExitCode::FAILURE;
+                }
             }
         }
-        
-        Commands::Encrypt { text, keyname, blinding, tier } => {
-            let record: KeyRecord = sqlx::query_as("SELECT seed, n, q FROM keys WHERE name = $1")
-                .bind(keyname)
-                .fetch_one(&pool)
-                .await
-                .expect("Kunci tidak ditemukan di database");
 
-            let q_big = BigInt::from_str(&record.q).expect("Invalid Q");
-            let seed_bytes = record.seed.as_bytes();
-            let n_val = record.n as usize;
-            let is_tier_a = tier.to_lowercase() == "a";
+        Commands::ListKeys => match db::list_keys(&pool).await {
+            Ok(records) => {
+                println!("📋 Daftar Kunci di Database:");
+                for (i, r) in records.iter().enumerate() {
+                    println!("{}. Seed: {}, N: {}, Q: {}", i + 1, r.seed, r.n, r.q);
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ Gagal mengambil daftar kunci: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
 
-            // LOGIKA BARU: Tentukan blinding
-            let (b_str_to_use, is_random) = match blinding {
-                Some(b) => (b.clone(), false),
-                None => {
-                    // Generate random blinding. Kita gunakan angka acak dari 1..1_000_000_000
-                    // (Di produksi, ini harus menggunakan OsRng, tapi kita simulasikan dengan time)
-                    let random_val = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .subsec_nanos() as u64;
-                    let random_b = (random_val % 1_000_000_000).to_string();
-                    (random_b, true)
+        Commands::Encrypt {
+            text,
+            keyname,
+            blinding,
+            tier,
+        } => {
+            let key = match db::get_key_by_name(&pool, &keyname).await {
+                Ok(k) => k,
+                Err(sqlx::Error::RowNotFound) => {
+                    eprintln!("❌ Kunci '{}' tidak ditemukan di database", keyname);
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => {
+                    eprintln!("❌ DB error: {}", e);
+                    return ExitCode::FAILURE;
                 }
             };
 
-            let b_big = BigInt::from_str(&b_str_to_use).expect("Invalid blinding");
-            let mut ciphertexts = Vec::new();
-
-            for byte in text.as_bytes() {
-                let m_big = BigInt::from_u8(*byte).unwrap();
-                let ct = if is_tier_a {
-                    encrypt_tier_a_with_blinding(&m_big, seed_bytes, n_val, &q_big, &b_big).expect("Encryption failed")
-                } else {
-                    encrypt_with_blinding(&m_big, seed_bytes, n_val, &q_big, &b_big).expect("Encryption failed")
-                };
-                ciphertexts.push(ct.to_string());
-            }
-
-            println!("Plaintext  : {}", text);
-            if is_random {
-                // Format baru: BLINDING:CT1,CT2,...
-                println!("Ciphertext (Tier {}): {}:{}", tier.to_uppercase(), b_str_to_use, ciphertexts.join(","));
-            } else {
-                // Format lama: CT1,CT2,... (karena user memberikan blinding manual)
-                println!("Ciphertext (Tier {}): {}", tier.to_uppercase(), ciphertexts.join(","));
+            match crypto::encrypt_text(&text, &key, &tier, blinding.as_deref()) {
+                Ok(ct) => {
+                    println!("Plaintext  : {}", text);
+                    println!("Ciphertext (Tier {}): {}", tier.to_uppercase(), ct);
+                }
+                Err(e) => {
+                    eprintln!("❌ Enkripsi gagal: {}", e);
+                    return ExitCode::FAILURE;
+                }
             }
         }
-        
-        Commands::Decrypt { ciphertext, keyname, blinding, tier } => {
-            let record: KeyRecord = sqlx::query_as("SELECT seed, n, q FROM keys WHERE name = $1")
-                .bind(keyname)
-                .fetch_one(&pool)
-                .await
-                .expect("Kunci tidak ditemukan di database");
 
-            let q_big = BigInt::from_str(&record.q).expect("Invalid Q");
-            let seed_bytes = record.seed.as_bytes();
-            let n_val = record.n as usize;
-            let is_tier_a = tier.to_lowercase() == "a";
-
-            // LOGIKA BARU: Parsing format ciphertext
-            let (b_str_to_use, ct_part) = if let Some(b) = blinding {
-                // Jika user memberikan --blinding, gunakan itu (format lama)
-                (b.clone(), ciphertext.clone())
-            } else {
-                // Jika tidak, coba parsing format baru (BLINDING:CT1,CT2,...)
-                let parts: Vec<&str> = ciphertext.split(':').collect();
-                if parts.len() == 2 {
-                    (parts[0].to_string(), parts[1].to_string())
-                } else {
-                    eprintln!("❌ Error: Format ciphertext tidak valid. Harap sertakan --blinding atau gunakan format BLINDING:CT...");
-                    return;
+        Commands::Decrypt {
+            ciphertext,
+            keyname,
+            blinding,
+            tier,
+        } => {
+            let key = match db::get_key_by_name(&pool, &keyname).await {
+                Ok(k) => k,
+                Err(sqlx::Error::RowNotFound) => {
+                    eprintln!("❌ Kunci '{}' tidak ditemukan di database", keyname);
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => {
+                    eprintln!("❌ DB error: {}", e);
+                    return ExitCode::FAILURE;
                 }
             };
 
-            let b_big = BigInt::from_str(&b_str_to_use).expect("Invalid blinding");
-            let ct_strings: Vec<&str> = ct_part.split(',').collect();
-            let mut decrypted_bytes = Vec::new();
+            match crypto::decrypt_text(&ciphertext, &key, &tier, blinding.as_deref()) {
+                Ok(pt) => println!("Decrypted Text: {}", pt),
+                Err(e) => {
+                    eprintln!("❌ Dekripsi gagal: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
 
-            for ct_str in ct_strings {
-                let c_big = BigInt::from_str(ct_str.trim()).expect("Invalid ciphertext part");
-                
-                let result = if is_tier_a {
-                    decrypt_tier_a(&c_big, seed_bytes, n_val, &q_big, &b_big)
-                } else {
-                    decrypt(&c_big, seed_bytes, n_val, &q_big, &b_big)
-                };
-
-                match result {
-                    Ok(m) => {
-                        let byte = m.to_u8().expect("Decrypted value is not a valid byte");
-                        decrypted_bytes.push(byte);
-                    },
+        // ===== API key management =====
+        Commands::Apikey { action } => match action {
+            ApikeyAction::Create { user, label } => {
+                let (plaintext, hash, prefix) = crypto::generate_api_key();
+                match db::insert_api_key(&pool, &user, label.as_deref(), &prefix, &hash).await {
+                    Ok(_) => {
+                        println!("✅ API key berhasil dibuat untuk user '{}'", user);
+                        println!();
+                        println!("⚠️  SIMPAN SEKARANG (tidak akan ditampilkan lagi):");
+                        println!("{}", plaintext);
+                        println!();
+                        println!("Prefix: {} | Label: {:?}", prefix, label);
+                    }
                     Err(e) => {
-                        eprintln!("Decryption Error pada bagian {}: {}", ct_str, e);
-                        return;
+                        eprintln!("❌ Gagal menyimpan API key: {}", e);
+                        return ExitCode::FAILURE;
                     }
                 }
             }
 
-            let decrypted_text = String::from_utf8_lossy(&decrypted_bytes).to_string();
-            println!("Decrypted Text: {}", decrypted_text);
+            ApikeyAction::List => match db::list_api_keys(&pool).await {
+                Ok(rows) => {
+                    println!("📋 Daftar API Key:");
+                    for (id, user, label, prefix, active) in rows {
+                        println!(
+                            "{}. user={} label={:?} prefix={} active={}",
+                            id, user, label, prefix, active
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Gagal mengambil daftar API key: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            },
+
+            ApikeyAction::Revoke { prefix } => {
+                match db::revoke_api_key_by_prefix(&pool, &prefix).await {
+                    Ok(n) if n > 0 => println!("✅ {} API key dinonaktifkan (prefix: {})", n, prefix),
+                    Ok(_) => {
+                        eprintln!("⚠️  Tidak ada API key aktif dengan prefix '{}'", prefix);
+                        return ExitCode::FAILURE;
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Gagal revoke API key: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+        },
+
+        // ===== REST API server =====
+        Commands::Serve { port } => {
+            let port = port
+                .or_else(|| std::env::var("FCR_PORT").ok().and_then(|p| p.parse().ok()))
+                .unwrap_or(8080);
+
+            if let Err(e) = api::serve(pool, port).await {
+                eprintln!("❌ Server error: {}", e);
+                return ExitCode::FAILURE;
+            }
         }
     }
+
+    ExitCode::SUCCESS
 }

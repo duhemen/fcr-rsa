@@ -2,7 +2,7 @@
 name = "fcr-engine"
 version = "0.1.0"
 edition = "2021"
-description = "FCR-RSA Command Line Engine (Research Prototype)"
+description = "FCR-RSA Command Line Engine + REST API (Research Prototype)"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
@@ -16,3 +16,12 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros"] }
 dotenvy = "0.15"
+
+# --- Fase 10A: REST API ---
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
