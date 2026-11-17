@@ -119,6 +119,17 @@ Fitur Auto-Mune (deteksi anomali spatiotemporal + *kill switch* + honeypot) yang
 *   Ubah pendekatan dari **"Percaya Header"** menjadi **"Verifikasi Kriptografis"** (JWT/HMAC).
 *   Ubah dari **"Lockdown Permanen"** menjadi **"Adaptive Threat Response"** (Risk Scoring: Latency 30% + GPS 40% + Timestamp 30%).
 
+### 6. Kepatuhan Hukum (UU PDP No. 27/2022) - Kritis
+
+Auto-Mune saat ini berpotensi menyimpan data lokasi (`X-FCR-GPS-Lat`, `X-FCR-GPS-Lon`) ke dalam tabel `anomaly_events`. Dalam konteks hukum Indonesia, ini adalah pelanggaran serius jika dilakukan tanpa dasar pemrosesan yang sah.
+
+*   **Pasal 20 & 21 UU PDP**: Pemrosesan data pribadi (termasuk geolokasi) **wajib** memiliki persetujuan (consent) eksplisit dan informasi yang jelas tentang tujuan serta jangka waktu penyimpanan.
+*   **Sanksi**: Pelanggaran dapat dikenai sanksi administratif (denda hingga 2% pendapatan tahunan) dan **sanksi pidana** (Pasal 67: penjara maksimal 5 tahun dan/atau denda hingga Rp5 miliar untuk individu, atau 10x lipat untuk korporasi).
+*   **Mitigasi Wajib (Fase 11)**:
+    1.  **Jangan simpan koordinat mentah**. Simpan hanya **jarak (distance)** atau **hash** dari koordinat di tabel `anomaly_events`.
+    2.  Jika tetap ingin menyimpan, API harus memiliki mekanisme *opt-in* (`X-FCR-Consent: true`) yang didokumentasikan jelas.
+    3.  Terapkan **retensi data** (misal: auto-delete log anomali setelah 30 hari).
+
 ---
 
 **Terakhir diperbarui:** 13 November 2026
