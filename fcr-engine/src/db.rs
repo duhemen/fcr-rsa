@@ -68,7 +68,7 @@ pub async fn find_active_api_key_by_hash(
 ) -> Result<Option<ApiKeyRecord>, sqlx::Error> {
     sqlx::query_as::<_, ApiKeyRecord>(
         "SELECT id, user_name, key_prefix FROM api_keys
-         WHERE key_hash = $1 AND is_active = TRUE",
+         WHERE key_hash = $1 AND is_active = TRUE AND is_locked = FALSE", // <-- Tambah is_locked
     )
     .bind(key_hash)
     .fetch_optional(pool)
@@ -124,4 +124,38 @@ pub async fn revoke_api_key_by_prefix(pool: &PgPool, prefix: &str) -> Result<u64
         .execute(pool)
         .await?;
     Ok(res.rows_affected())
+}
+
+/// Catat anomali ke tabel anomaly_events.
+pub async fn log_anomaly(
+    pool: &PgPool,
+    api_key_id: i64,
+    event_type: &str,
+    details: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO anomaly_events (api_key_id, event_type, details) VALUES ($1, $2, $3)",
+    )
+    .bind(api_key_id)
+    .bind(event_type)
+    .bind(details)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Kunci API key (Kill Switch).
+pub async fn lock_api_key(
+    pool: &PgPool,
+    api_key_id: i64,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE api_keys SET is_locked = TRUE, locked_at = NOW(), lock_reason = $1 WHERE id = $2",
+    )
+    .bind(reason)
+    .bind(api_key_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

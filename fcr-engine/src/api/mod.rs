@@ -1,5 +1,6 @@
 //! REST API module: router, AppState, server bootstrap.
 
+pub mod auto_immune;
 pub mod auth;
 pub mod handlers;
 

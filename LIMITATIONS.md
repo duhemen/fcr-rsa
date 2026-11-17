@@ -91,5 +91,35 @@ itu adalah bug dokumentasi—laporkan.
 
 ---
 
+## 🔬 Known Issues & Limitations: Auto-Mune (Fase 10B)
+
+Fitur Auto-Mune (deteksi anomali spatiotemporal + *kill switch* + honeypot) yang diimplementasikan pada Fase 10B adalah **prototipe demonstrasi**. Analisis kritis menemukan beberapa titik rawan yang **harus** diselesaikan sebelum digunakan di lingkungan produksi:
+
+### 1. Risiko False Positive (Pemblokiran Pengguna Sah)
+*   **Latency Threshold (500ms)**: Terlalu rentan terhadap koneksi 3G/4G lambat atau jaringan satelit (Starlink). Pengguna sah bisa salah di-*lock*.
+*   **GPS Drifting**: Perpindahan GPS akibat *noise* perangkat (terutama di dalam gedung) bisa memicu *speed anomaly* palsu.
+*   **Timestamp Non-Monotonic**: Jam klien yang tidak sinkron (misal setelah baterai habis) bisa dianggap sebagai anomali.
+*   **Mitigasi (Fase 11)**: Terapkan *Dynamic Baseline*, toleransi jarak (abaikan perpindahan < 5km), dan toleransi waktu (±5 menit).
+
+### 2. Risiko Bypass (Penyerang Lolos)
+*   **Header Spoofing**: Middleware saat ini **mempercayai mentah-mentah** header `X-FCR-Latency` dan `X-FCR-GPS` dari klien. Penyerang bisa memanipulasi header agar terlihat "normal".
+*   **Replay Attack**: Middleware belum menyimpan *state* `last_token` per API Key (masih `None`), sehingga penyerang bisa mengirim ulang request yang sama.
+*   **Mitigasi (Fase 11)**: Token spatiotemporal harus ditandatangani (HMAC/JWT). Server harus mengukur latency sendiri (TCP handshake) atau memvalidasi token sesi.
+
+### 3. Risiko Denial of Service (DoS)
+*   **Lockdown Permanen**: Jika API Key penyerang bocor, penyerang bisa sengaja mengirim request dengan latency tinggi untuk memicu *lockdown* pada key korban. Korban menjadi tidak bisa bertransaksi.
+*   **Mitigasi (Fase 11)**: Jangan langsung *lock* permanen. Gunakan *Rate Limiting*, *Cooldown* (blokir sementara 5 menit), atau minta verifikasi tambahan (MFA/OTP).
+
+### 4. Skalabilitas & Privasi
+*   **State Management**: Menyimpan `last_token` di PostgreSQL untuk setiap request akan membebani database (I/O bottleneck).
+*   **Privasi GPS**: Menyimpan koordinat mentah (Lat/Lon) di tabel `anomaly_events` berpotensi melanggar privasi (UU PDP/GDPR).
+*   **Mitigasi (Fase 11)**: Gunakan Redis (in-memory) untuk state spatiotemporal. Simpan hanya *hash* koordinat atau jarak (distance) di log, bukan koordinat mentah.
+
+### 5. Rekomendasi Arsitektur (Hardening)
+*   Ubah pendekatan dari **"Percaya Header"** menjadi **"Verifikasi Kriptografis"** (JWT/HMAC).
+*   Ubah dari **"Lockdown Permanen"** menjadi **"Adaptive Threat Response"** (Risk Scoring: Latency 30% + GPS 40% + Timestamp 30%).
+
+---
+
 **Terakhir diperbarui:** 13 November 2026
 **Versi:** 0.1.0-research
