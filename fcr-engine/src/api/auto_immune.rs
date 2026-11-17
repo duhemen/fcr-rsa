@@ -1,9 +1,9 @@
-//! Auto-Mune: Deteksi anomali spatiotemporal & manajemen lockdown.
+//! Auto-Mune: Deteksi anomali spatiotemporal berbasis Privacy-Preserving Location Hash.
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
-/// Header yang dikirim klien untuk verifikasi spatiotemporal.
 #[derive(Debug, Deserialize, Clone)]
 pub struct SpatiotemporalToken {
     pub gps_lat: f64,
@@ -12,58 +12,81 @@ pub struct SpatiotemporalToken {
     pub latency_ms: f64,
 }
 
-/// Hasil pengecekan anomali.
+#[derive(Debug, Clone)]
+pub struct LastLocationState {
+    pub loc_hash: String,
+    pub timestamp: DateTime<Utc>,
+}
+
 pub struct AnomalyResult {
-    pub is_anomaly: bool,
+    pub risk_score: u32,
+    pub distance_km: f64,
+    pub current_loc_hash: String,
     pub reason: Option<String>,
 }
 
-/// Hitung jarak Haversine (dalam km).
-fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let r = 6371.0; // Radius bumi dalam km
-    let dlat = (lat2 - lat1).to_radians();
-    let dlon = (lon2 - lon1).to_radians();
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().asin();
-    r * c
+/// Kuantisasi koordinat ke grid ~11km (1 desimal) lalu hash dengan SHA-256 + api_key_id.
+/// Mematuhi UU PDP: tidak ada koordinat mentah yang keluar dari memori.
+pub fn hash_location_grid(api_key_id: i64, lat: f64, lon: f64) -> String {
+    let grid_str = format!("{}:{:.1},{:.1}", api_key_id, lat, lon);
+    let mut hasher = Sha256::new();
+    hasher.update(grid_str.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
-/// Cek apakah ada anomali antara token sekarang dan token sebelumnya.
-pub fn check_anomaly(
+/// Evaluasi token dan hitung Risk Score (0-100) tanpa menyimpan koordinat mentah.
+pub fn evaluate_risk(
+    api_key_id: i64,
     current: &SpatiotemporalToken,
-    last: Option<&SpatiotemporalToken>,
+    last: Option<&LastLocationState>,
 ) -> AnomalyResult {
-    // 1. Latency Anomaly (Selalu dicek, bahkan tanpa last_token)
-    if current.latency_ms > 500.0 {
-        return AnomalyResult {
-            is_anomaly: true,
-            reason: Some(format!("latency anomaly: {:.1} ms", current.latency_ms)),
-        };
+    let mut score = 0;
+    let mut reasons = Vec::new();
+    let mut estimated_distance_km = 0.0;
+
+    let current_loc_hash = hash_location_grid(api_key_id, current.gps_lat, current.gps_lon);
+
+    // 1. Cek Latency (Hardened)
+    if current.latency_ms > 1500.0 {
+        score += 80;
+        reasons.push(format!("extreme latency anomaly: {:.1} ms", current.latency_ms));
+    } else if current.latency_ms > 800.0 {
+        score += 20;
     }
 
-    // 2. Pengecekan yang butuh last_token
-    let Some(last) = last else {
-        return AnomalyResult { is_anomaly: false, reason: None };
-    };
+    // 2. Cek Perubahan Zona Lokasi (Hash Comparison) & Timestamp
+    if let Some(last) = last {
+        let dt = (current.timestamp - last.timestamp).num_seconds() as f64;
 
-    let dt = (current.timestamp - last.timestamp).num_seconds() as f64;
-    if dt <= 0.0 {
-        return AnomalyResult {
-            is_anomaly: true,
-            reason: Some("non-monotonic timestamp".into()),
-        };
+        if dt < -300.0 {
+            score += 30;
+            reasons.push(format!("timestamp anomaly: {:.0}s drift", dt));
+        } else if dt >= 0.0 {
+            // Jika hash grid berubah dalam waktu singkat (< 30 menit / 1800 detik)
+            // berarti terjadi perpindahan antar-zona (> ~11 km) secara tidak wajar
+            if !last.loc_hash.is_empty() && current_loc_hash != last.loc_hash {
+                estimated_distance_km = 15.0; // Estimasi batas bawah lintas grid
+                if dt < 60.0 {
+                    score += 55;
+                    reasons.push(format!("impossible zone jump in {:.0}s", dt));
+                } else if dt < 1800.0 {
+                    score += 30;
+                    reasons.push(format!("rapid zone transition in {:.0}s", dt));
+                }
+            }
+        }
+    } else {
+        score += 5;
     }
 
-    // 3. Speed Anomaly (Haversine)
-    let dist_km = haversine(last.gps_lat, last.gps_lon, current.gps_lat, current.gps_lon);
-    let speed_kmh = dist_km / (dt / 3600.0);
-    if speed_kmh > 900.0 { // Melebihi kecepatan pesawat komersial
-        return AnomalyResult {
-            is_anomaly: true,
-            reason: Some(format!("speed anomaly: {:.1} km/h", speed_kmh)),
-        };
+    AnomalyResult {
+        risk_score: score.min(100),
+        distance_km: estimated_distance_km,
+        current_loc_hash,
+        reason: if reasons.is_empty() {
+            None
+        } else {
+            Some(reasons.join("; "))
+        },
     }
-
-    AnomalyResult { is_anomaly: false, reason: None }
 }

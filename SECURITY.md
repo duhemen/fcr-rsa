@@ -10,7 +10,7 @@ FCR-RSA adalah **purwarupa riset**. Belum melalui audit keamanan independen.
 Jika Anda menemukan celah keamanan, **jangan** membuka Issue publik.
 Laporkan secara privat melalui salah satu jalur berikut:
 
-- Email: (isi dengan alamat email kontak Emen)
+- Email: (muhammadharamein@gmail.com)
 - GitHub Security Advisory: buka tab "Security" di repo ini
 
 Sertakan dalam laporan:

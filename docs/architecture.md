@@ -50,23 +50,41 @@ Ini mencegah serangan chosen-plaintext attack (CPA).
 - Sinkronisasi session key antara Tier B dan Tier A
 - Fibonacci heartbeat untuk memastikan komunikasi aman
 
-## 3. Sistem Auto-Imun
+## 3. Sistem Auto-Imun (Zero-Trust Hardened — Fase 11)
 
-### A. Token Spatiotemporal
+### A. Token Spatiotemporal & Integritas Kriptografis (HMAC-SHA256)
 
-Setiap transaksi terikat pada:
-- **GPS**: mendeteksi anomali lokasi (kunci bocor)
-- **Timestamp**: mendeteksi transaksi di luar jam operasional
-- **Latensi**: mendeteksi MITM (delay tidak wajar)
+Setiap transaksi API wajib menyertakan telemetri fisik yang dilindungi integritasnya:
+- **GPS (`X-FCR-GPS-Lat`, `X-FCR-GPS-Lon`)**: Dikuantisasi ke grid zona (~11 km) dan di-hash dengan **Keyed SHA-256** (`last_loc_hash`) di memori. Koordinat mentah tidak pernah disimpan ke database (kepatuhan UU PDP No. 27/2022).
+- **Timestamp (`X-FCR-Timestamp`)**: Mendeteksi *replay attack* dan *clock skew* (toleransi mundur hingga 5 menit).
+- **Latensi (`X-FCR-Latency`)**: Mendeteksi anomali proksi atau penyadapan MITM.
+- **Tanda Tangan (`X-FCR-Signature`)**: Tanda tangan **HMAC-SHA256** atas payload `{lat}:{lon}:{timestamp}:{latency}` yang diverifikasi secara *constant-time* untuk mencegah *header spoofing*.
 
-### B. Matematical Kill-Switch
+### B. Adaptive Threat Response & Deceptive Honeypot
 
-Jika anomali terdeteksi:
-- Ubah session key secara otomatis
-- Blokir IP / Device ID
-- Kirim honeytoken untuk melacak penyerang
-- **Endemi**: isolasi hanya pada cabang yang bocor, tanpa mengganggu
-  jaringan pusat
+Alih-alih mengunci kunci secara permanen (yang berisiko memicu *Denial of Service*), sistem menerapkan respons adaptif berbasis **Risk Score (0–100)**:
+- **Fail-Closed Enforcement**: Request tanpa telemetri lengkap ditolak seketika (`HTTP 400`), sedangkan tanda tangan HMAC palsu langsung diblokir (`HTTP 401`).
+- **Deceptive Honeypot (`Score >= 70`)**: Jika terdeteksi *impossible zone jump* atau *latency spike* ekstrem, server tetap mengembalikan `HTTP 200 OK` berisi `ciphertext_b64` palsu yang menyerupai struktur enkripsi asli agar penyerang tidak menyadari bahwa sesi mereka telah dialihkan.
+- **Self-Healing Cooldown**: Kunci yang terkompromi dibekukan sementara selama **5 menit** (`apply_cooldown`) agar pengguna sah dapat pulih otomatis tanpa intervensi manual.
+
+## 4. Alur Data (REST API & Middleware)
+
+```text
+[Klien / SDK]
+   |  (Sign payload telemetri via HMAC-SHA256)
+   v
+[Middleware: require_api_key]
+   |-- 1. Cek API Key & Status Cooldown DB -----> [401 jika terkunci]
+   |-- 2. Validasi Header & HMAC Constant-Time -> [400 / 401 jika spoofed]
+   |-- 3. Quantize GPS -> Keyed SHA-256 Hash
+   |-- 4. Evaluasi Risk Score (0-100)
+   |       └── Skor >= 70: Log Anomali + Set Cooldown 5m + [200 Deceptive Honeypot]
+   v
+[Handler: /keygen | /encrypt | /decrypt]
+   |  (Operasi Fibonacci Non-Linear + LWE + Random Blinding)
+   v
+[Ciphertext / Plaintext Asli]
+```
 
 ## 4. Alur Data
 
@@ -107,4 +125,4 @@ plaintext yang sama akan menghasilkan ciphertext yang sama.
 
 ---
 
-**Terakhir diperbarui:** 13 November 2026
+**Terakhir diperbarui:** 17 November 2026

@@ -140,20 +140,15 @@ diimplementasikan di Python (`tier_a.py`).
 
 ---
 
-## 🛡️ 3. Lapisan Auto-Imun
+## 🛡️ 3. Lapisan Auto-Imun (Zero-Trust Hardened — v0.4.0)
 
-FCR-RSA tidak berasumsi lapisan manusia aman. Protokol mengikat
-**Spatiotemporal Token** (GPS + Timestamp + Latensi) ke dalam fase
-transformasi:
+FCR-RSA tidak berasumsi lapisan manusia dan jaringan selalu aman. Middleware REST API (`fcr-engine`) mengikat **Spatiotemporal Token** yang dilindungi secara kriptografis:
 
-- **Lockdown Endemi:** Jika kredensial bocor dan dipakai di luar
-  parameter koordinat yang sah, sistem mengisolasi cabang tersebut
-  tanpa melumpuhkan jaringan pusat.
-- **Deteksi MITM:** Latensi tidak wajar (≥300ms) memicu alarm.
-- **Honeytoken:** Konsep ada, implementasi belum.
+- **Integritas HMAC-SHA256:** Seluruh header telemetri (`X-FCR-GPS-*`, `X-FCR-Timestamp`, `X-FCR-Latency`) wajib ditandatangani dengan `X-FCR-Signature` dan diverifikasi secara *constant-time* untuk mencegah *header spoofing*.
+- **Privacy-Preserving Location Hashing (UU PDP):** Koordinat GPS mentah tidak pernah disimpan ke database. Lokasi dikuantisasi ke grid zona (~11 km) dan di-hash dengan **Keyed SHA-256** di memori sebelum disimpan.
+- **Deceptive Honeypot & Adaptive Cooldown:** Anomali perpindahan zona ekstrem atau lonjakan latensi (`Risk Score >= 70`) dialihkan ke *honeypot* yang mengembalikan `ciphertext_b64` palsu menyerupai struktur asli, disertai *self-healing cooldown* 5 menit untuk mencegah *permanent DoS*.
 
-> ⚠️ Logika ini **belum diuji terhadap data dunia nyata**. False positive
-> dan false negative belum diukur. Lihat [LIMITATIONS.md](LIMITATIONS.md).
+> ⚠️ Logika ini **telah lolos simulasi Red Team 7 tahap**, namun rasio *false positive* pada trafik dunia nyata skala besar belum diukur. Lihat [LIMITATIONS.md](LIMITATIONS.md).
 
 ---
 

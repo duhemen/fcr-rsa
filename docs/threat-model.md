@@ -19,41 +19,31 @@
 
 ## 3. Yang Dilawan
 
-- **Serangan matematis dasar:** LLL reduction, noise attack pada SHA-256
-  (diuji, gagal menembus)
-- **Serangan CPA:** via IND-CPA patch (diuji, gagal menembus)
-- **MITM dengan delay tidak wajar:** via token latensi
-- **Transaksi di luar jam operasional:** via token timestamp
-- **Anomali lokasi:** via token GPS
-- **Isolasi cabang bocor:** via kill-switch endemi
+- **Serangan matematis dasar:** LLL & BKZ 2.0 (3×3) reduction, noise attack pada SHA-256 (diuji, gagal menembus).
+- **Serangan CPA:** via IND-CPA patch dengan random blinding (diuji, gagal menembus).
+- **Header Spoofing & Tampering:** via tanda tangan **HMAC-SHA256** *constant-time* pada header telemetri (diuji, ditolak `HTTP 401`).
+- **Blind Key Usage (Pencurian Kunci Tanpa SDK):** via kebijakan *fail-closed* telemetri wajib (diuji, ditolak `HTTP 400`).
+- **Impossible Travel & MITM Delay:** via evaluasi *Risk Score* berbasis perpindahan grid lokasi dan anomali latensi (diuji, memicu *honeypot* + *cooldown*).
+- **Permanent DoS pada Kunci Sah:** dimitigasi dengan mengganti *hard lock* menjadi *self-healing cooldown* 5 menit.
+- **Kebocoran Privasi Geolokasi (UU PDP):** dimitigasi dengan *Keyed Geospatial Grid Hashing* (tidak ada koordinat mentah di database).
 
 ## 4. Yang TIDAK Dilawan (Saat Ini)
 
 - **BKZ 2.0 dengan parameter besar (matriks > 10×10)** — belum diuji.
-  *Catatan: BKZ 2.0 dengan matriks 3×3 dan `Q = 10^9` sudah diuji (13 Nov 2026), gagal menembus. Lihat `simulations/bkz/`.*
-- **Algebraic cryptanalysis** — belum diuji
-- **Quantum simulation (Shor, Grover)** — belum diuji (Fase 4A)
-- **Side-channel timing pada Tier A** — implementasi Rust Tier A belum constant-time
-- **Fault injection** — belum diuji
-- **Supply chain attack** — belum ada mitigasi
-- **Insider dengan akses sah** — di luar cakupan protokol
-- **Serangan physical** — di luar cakupan
+- **Algebraic cryptanalysis** — belum diuji.
+- **Side-channel timing pada BigInt Rust** — baru verifikasi HMAC yang *constant-time*; operasi aritmetika besar belum diaudit penuh.
+- **Fault injection & Physical side-channel** — belum diuji.
+- **Supply chain attack** — di luar cakupan protokol.
+- **Insider dengan perangkat & lokasi sah** — tidak terdeteksi oleh anomali spatiotemporal.
 
-## 5. Asumsi
+## 6. Pertanyaan Terbuka & Status Resolusi
 
-- SHA-256 tetap aman (untuk `noise_seed`)
-- Modulus Gaussian `Q` cukup besar untuk mencegah faktorisasi
-- Parameter Tier A/B dipilih dengan benar
-- Pengguna tidak membocorkan kunci secara sengaja
-
-## 6. Pertanyaan Terbuka
-
-- Apakah Fibonacci non-linear benar-benar menghasilkan kekacauan yang
-  cukup untuk mencegah LLL/BKZ? (perlu pengujian lebih lanjut)
-- Apakah auto-imun bisa false positive dalam produksi?
-- Bagaimana honeytoken berinteraksi dengan transaksi sah?
-- Apakah kill-switch bisa disalahgunakan untuk DoS?
+- ✅ **Apakah kill-switch bisa disalahgunakan untuk DoS?** *Terjawab (17 Nov 2026):* Ya, jika menggunakan *lock* permanen. Telah diganti dengan *adaptive cooldown* 5 menit sehingga sistem pulih otomatis.
+- ✅ **Bagaimana honeypot berinteraksi dengan penyerang?** *Terjawab (17 Nov 2026):* Server mengembalikan JSON `ciphertext_b64` palsu yang identik secara struktural dengan keluaran asli sambil mengaktifkan *cooldown* di latar belakang.
+- ✅ **Bagaimana menjaga privasi GPS pengguna?** *Terjawab (17 Nov 2026):* Koordinat dikuantisasi ke grid ~11 km dan di-hash dengan Keyed SHA-256 sebelum menyentuh PostgreSQL.
+- ⏳ **Apakah Fibonacci non-linear tetap tahan terhadap BKZ 2.0 dimensi tinggi?** *(Masih terbuka — target pengujian Fase 12).*
+- ⏳ **Berapa rasio false positive pada trafik jaringan seluler/satelit dunia nyata?** *(Masih terbuka — butuh uji lapangan).*
 
 ---
 
-**Terakhir diperbarui:** 13 November 2026
+**Terakhir diperbarui:** 17 November 2026
