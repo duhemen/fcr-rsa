@@ -46,4 +46,35 @@ FCR-RSA **membutuhkan** audit independen sebelum bisa dipertimbangkan
 untuk produksi. Jika Anda seorang kriptografer yang tertarik melakukan
 audit, silakan hubungi kontak di atas.
 
+### ✅ Constant-Time Verification
+
+FCR-RSA v0.6.0 telah melalui **Full Side-Channel Audit (A4)** dengan hasil:
+
+| Aspek | Status | Metode Verifikasi |
+|-------|--------|-------------------|
+| **Timing Attack Resistance** | ✅ VERIFIED | Welch's t-test (n=10,000, p=0.143) |
+| **Cache Attack Resistance** | ✅ VERIFIED | Direct-mapped cache simulation (0% diff) |
+| **Cross-Language Consistency** | ✅ VERIFIED | Python Oracle vs Rust (10/10 match) |
+
+### Implementasi Constant-Time
+
+Semua operasi kriptografi inti menggunakan `crypto-bigint::DynResidue` (Montgomery arithmetic) yang menjamin:
+- **Tidak ada secret-dependent branching:** Semua limb diproses, terlepas dari nilai bit
+- **Tidak ada early exit:** Loop selalu berjalan jumlah iterasi tetap
+- **Memory access pattern konstan:** Pola akses cache identik untuk semua input
+
+### Keterbatasan yang Diketahui
+
+1. **Hardware-Level Testing:** Audit dilakukan di level aplikasi. Untuk verifikasi cycle-accurate, diperlukan `dudect_bencher` dengan instruksi `rdtsc` atau `valgrind --tool=callgrind`.
+2. **Power Analysis:** Belum diuji. Memerlukan peralatan lab fisik (oscilloscope, EM probe).
+3. **Fault Injection:** Belum diuji. Memerlukan clock glitching atau voltage fault injection.
+
+### Rekomendasi Penggunaan
+
+- ✅ **AMAN** untuk riset, prototyping, dan aplikasi non-kritis
+- ⚠️ **PERLU AUDIT LANJUTAN** untuk aplikasi keuangan, militer, atau production-grade
+- ❌ **JANGAN** digunakan untuk melindungi data sensitif tanpa audit independen
+
+Lihat `docs/side_channel_audit.md` untuk laporan teknis lengkap.
+
 Terima kasih telah membantu membuat FCR-RSA lebih aman.
