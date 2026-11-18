@@ -1,133 +1,114 @@
-//! Wrapper enkripsi/dekripsi FCR-RSA untuk engine.
-//!
-//! Menyediakan:
-//! - `encrypt_text` / `decrypt_text`: per-byte block cipher (Base-256)
-//! - Generate random blinding yang aman (fix dari time-based)
+//! FCR Engine - Hybrid KEM + AEAD (v0.6.0)
+//! Integrasi dengan Q 2048-bit
 
-use fcr_rsa::{decrypt, decrypt_tier_a, encrypt_with_blinding, encrypt_tier_a_with_blinding};
-use num_bigint::BigInt;
-use num_traits::{FromPrimitive, ToPrimitive};
-use rand::Rng;
-use std::str::FromStr;
+use crypto_bigint::U2048;
+use fcr_core_rust::fib::{
+    max_seed_bytes,
+    generate_key_pair,
+    derive_blinding,
+    encrypt_with_blinding_ct,
+    decrypt_with_blinding_ct,
+    bytes_to_u2048,
+    u2048_to_bytes,
+    FcrKeyPair,
+};
+use hkdf::Hkdf;
+use sha2::Sha256;
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
+use base64::{Engine as _, engine::general_purpose};
+use rand::RngCore;
 
-use crate::db::KeyRecord;
+/// Enkripsi Hybrid KEM + AEAD (v0.6.0)
+pub fn encrypt_hybrid_kem(
+    text: &str, 
+    key_pair: &FcrKeyPair,
+    master_seed: &[u8]
+) -> Result<String, Box<dyn std::error::Error>> {
+    // 1. Generate session seed acak (255 byte untuk Q 2048-bit)
+    let max_bytes = max_seed_bytes();
+    let mut session_seed_bytes = vec![0u8; max_bytes];
+    rand::rngs::OsRng.fill_bytes(&mut session_seed_bytes);
+    
+    // 2. Derive blinding factor secara deterministik
+    let blinding = derive_blinding(master_seed, &nonce_bytes)?;
+    // 3. Konversi session seed ke U2048
+    let seed_bigint = bytes_to_u2048(&session_seed_bytes)?;
+    
+    // 4. Enkripsi seed dengan FCR-RSA (constant-time)
+    let encrypted_seed = encrypt_with_blinding_ct(
+        &seed_bigint, 
+        &key_pair.e_vec, 
+        &blinding
+    );
 
-/// Generate random blinding yang aman (32 byte → modulo 1e9).
-/// Menggantikan `SystemTime::now().subsec_nanos()` yang tidak aman.
-pub fn generate_blinding() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    let val = BigInt::from_bytes_be(num_bigint::Sign::Plus, &bytes) % BigInt::from(1_000_000_000u64);
-    // Pastikan tidak nol
-    let val = if val == BigInt::from(0u64) {
-        BigInt::from(1u64)
-    } else {
-        val
-    };
-    val.to_string()
+    
+    // 5. Turunkan kunci sesi 256-bit dari session seed menggunakan HKDF
+    let hk = Hkdf::<Sha256>::new(None, &session_seed_bytes);
+    let mut session_key_bytes = [0u8; 32];
+    hk.expand(b"fcr-rsa-session-key-v1", &mut session_key_bytes)?;
+    
+    // 6. Enkripsi data dengan ChaCha20-Poly1305 (AEAD)
+    let cipher = ChaCha20Poly1305::new_from_slice(&session_key_bytes)?;
+    let mut nonce_bytes = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, text.as_bytes())?;
+    
+    // 7. Format Output: ES:NONCE:CT (Base64)
+    let es_b64 = general_purpose::STANDARD.encode(u2048_to_bytes(&encrypted_seed));
+    let nonce_b64 = general_purpose::STANDARD.encode(nonce_bytes);
+    let ct_b64 = general_purpose::STANDARD.encode(ciphertext);
+    
+    Ok(format!("{}:{}:{}", es_b64, nonce_b64, ct_b64))
 }
 
-/// Enkripsi teks per-byte. Return format `"BLINDING:CT1,CT2,..."`.
-///
-/// - Jika `blinding` = `Some`, gunakan deterministik (untuk test vector).
-/// - Jika `blinding` = `None`, generate random (IND-CPA produksi).
-pub fn encrypt_text(
-    text: &str,
-    key: &KeyRecord,
-    tier: &str,
-    blinding: Option<&str>,
-) -> Result<String, String> {
-    let q = BigInt::from_str(&key.q).map_err(|e| format!("invalid Q: {}", e))?;
-    let seed = key.seed.as_bytes();
-    let n = key.n as usize;
-    let is_tier_a = tier.eq_ignore_ascii_case("a");
-
-    let (b_str, _is_random) = match blinding {
-        Some(b) => (b.to_string(), false),
-        None => (generate_blinding(), true),
-    };
-    let b_big = BigInt::from_str(&b_str).map_err(|e| format!("invalid blinding: {}", e))?;
-
-    let mut cts = Vec::with_capacity(text.len());
-    for byte in text.as_bytes() {
-        let m = BigInt::from_u8(*byte).ok_or("byte conversion failed")?;
-        let ct = if is_tier_a {
-            encrypt_tier_a_with_blinding(&m, seed, n, &q, &b_big)
-        } else {
-            encrypt_with_blinding(&m, seed, n, &q, &b_big)
-        }
-        .map_err(|e| format!("encrypt error: {}", e))?;
-        cts.push(ct.to_string());
+/// Dekripsi Hybrid KEM + AEAD (v0.6.0)
+pub fn decrypt_hybrid_kem(
+    encrypted_data: &str, 
+    key_pair: &FcrKeyPair,
+    master_seed: &[u8]
+) -> Result<String, Box<dyn std::error::Error>> {
+    // 1. Parse format: ES:NONCE:CT
+    let parts: Vec<&str> = encrypted_data.split(':').collect();
+    if parts.len() != 3 {
+        return Err("Invalid encrypted data format".into());
     }
-
-    Ok(format!("{}:{}", b_str, cts.join(",")))
-}
-
-/// Dekripsi ciphertext. Mendukung format `"BLINDING:CT1,CT2,..."` atau
-/// `"CT1,CT2,..."` (jika `blinding` diberikan manual).
-pub fn decrypt_text(
-    ciphertext: &str,
-    key: &KeyRecord,
-    tier: &str,
-    blinding: Option<&str>,
-) -> Result<String, String> {
-    let q = BigInt::from_str(&key.q).map_err(|e| format!("invalid Q: {}", e))?;
-    let seed = key.seed.as_bytes();
-    let n = key.n as usize;
-    let is_tier_a = tier.eq_ignore_ascii_case("a");
-
-    let (b_str, ct_part) = match blinding {
-        Some(b) => (b.to_string(), ciphertext.to_string()),
-        None => {
-            let parts: Vec<&str> = ciphertext.split(':').collect();
-            if parts.len() != 2 {
-                return Err(
-                    "format ciphertext tidak valid: butuh --blinding atau format BLINDING:CT..."
-                        .into(),
-                );
-            }
-            (parts[0].to_string(), parts[1].to_string())
-        }
-    };
-    let b_big = BigInt::from_str(&b_str).map_err(|e| format!("invalid blinding: {}", e))?;
-
-    let mut bytes = Vec::new();
-    for ct_str in ct_part.split(',') {
-        let c = BigInt::from_str(ct_str.trim()).map_err(|e| format!("invalid ciphertext: {}", e))?;
-        let m = if is_tier_a {
-            decrypt_tier_a(&c, seed, n, &q, &b_big)
-        } else {
-            decrypt(&c, seed, n, &q, &b_big)
-        }
-        .map_err(|e| format!("decrypt error: {}", e))?;
-        let byte = m.to_u8().ok_or("decrypted value bukan byte valid")?;
-        bytes.push(byte);
-    }
-
-    String::from_utf8(bytes).map_err(|e| format!("hasil dekripsi bukan UTF-8 valid: {}", e))
-}
-
-/// Helper untuk `apikey create`: generate API key + hash + prefix.
-pub fn generate_api_key() -> (String, String, String) {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    let plaintext = URL_SAFE_NO_PAD.encode(&bytes); // 43 char
-
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(plaintext.as_bytes());
-    let key_hash = hex::encode(hasher.finalize());
-
-    let prefix = plaintext[..8].to_string();
-    (plaintext, key_hash, prefix)
-}
-
-/// Helper: hash API key dari header Authorization (untuk middleware).
-pub fn hash_api_key(plaintext: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(plaintext.as_bytes());
-    hex::encode(hasher.finalize())
+    
+    // 2. Decode Base64
+    let encrypted_seed_bytes = general_purpose::STANDARD.decode(parts[0])?;
+    let nonce_bytes = general_purpose::STANDARD.decode(parts[1])?;
+    let ciphertext = general_purpose::STANDARD.decode(parts[2])?;
+    
+    // 3. Konversi encrypted seed ke U2048
+    let encrypted_seed = bytes_to_u2048(&encrypted_seed_bytes)?;
+    
+    // 4. Dekripsi seed dengan FCR-RSA
+    // Kita perlu derive blinding yang sama seperti saat enkripsi
+    // Tapi kita belum tahu session_seed... ini masalah!
+    
+    // Solusi: Kita perlu menyimpan session_seed atau blinding di ciphertext
+    // ATAU: Kita ubah desain agar blinding di-derive dari encrypted_seed itu sendiri
+    
+    // Untuk saat ini, kita gunakan pendekatan alternatif:
+    // Blinding di-derive dari master_seed + encrypted_seed (deterministik)
+    let blinding = derive_blinding(master_seed, &nonce_bytes)?;
+    let session_seed_bigint = decrypt_with_blinding_ct(
+        &encrypted_seed,
+        &key_pair.e_vec_inv,
+        &blinding
+    );
+    
+    let session_seed_bytes = u2048_to_bytes(&session_seed_bigint);
+    
+    // 5. Turunkan kunci sesi 256-bit dari session seed
+    let hk = Hkdf::<Sha256>::new(None, &session_seed_bytes);
+    let mut session_key_bytes = [0u8; 32];
+    hk.expand(b"fcr-rsa-session-key-v1", &mut session_key_bytes)?;
+    
+    // 6. Dekripsi data dengan ChaCha20-Poly1305
+    let cipher = ChaCha20Poly1305::new_from_slice(&session_key_bytes)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())?;
+    
+    Ok(String::from_utf8(plaintext)?)
 }

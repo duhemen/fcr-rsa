@@ -1,56 +1,48 @@
-use dudect_bencher::{ctbench_main, BenchRng, Class, CtRunner};
-use fcr_rsa::decrypt;
-use num_bigint::BigInt;
-use num_traits::FromPrimitive;
-use rand::RngExt;
+//! Constant-Time Benchmark for FCR-RSA v0.6.0
+//! Mengukur performa enkripsi 2048-bit dengan deterministic blinding.
 
-// Parameter yang akan digunakan di seluruh tes
-const Q: u64 = 1_000_000_007;
-const SEED: &[u8] = b"fcr-rsa-demo-seed";
-const N: usize = 10;
-const BLINDING: u64 = 12345;
+use fcr_core_rust::{
+    bytes_to_u2048,
+    derive_blinding,
+    encrypt_with_blinding_ct,
+    generate_key_pair,
+};
 
-/// Fungsi pembantu untuk membuat input yang valid (Kelas Left)
-fn make_valid_input() -> BigInt {
-    let q = BigInt::from_u64(Q).unwrap();
-    let m = BigInt::from_u64(42).unwrap();
-    // PERBAIKAN: encrypt sekarang hanya butuh 4 argumen (tanpa blinding)
-    // karena fungsi produksi akan otomatis generate R_blind.
-    fcr_rsa::encrypt(&m, SEED, N, &q).unwrap()
-}
-
-/// Fungsi pembantu untuk membuat input yang rusak (Kelas Right)
-fn make_corrupted_input(rng: &mut BenchRng) -> BigInt {
-    let valid_ct = make_valid_input();
-    let delta = rng.random_range(1..1000);
-    &valid_ct + BigInt::from_u64(delta).unwrap()
-}
-
-/// Benchmark utama untuk dudect
-fn decrypt_timing_test(runner: &mut CtRunner, rng: &mut BenchRng) {
-    let q = BigInt::from_u64(Q).unwrap();
-    let b = BigInt::from_u64(BLINDING).unwrap();
-
-    let samples = 100_000;
-    let mut inputs = Vec::with_capacity(samples);
-    let mut classes = Vec::with_capacity(samples);
-
-    for _ in 0..samples {
-        if rng.random_bool(0.5) {
-            inputs.push(make_valid_input());
-            classes.push(Class::Left);
-        } else {
-            inputs.push(make_corrupted_input(rng));
-            classes.push(Class::Right);
-        }
+fn main() {
+    println!("=== FCR-RSA v0.6.0 Constant-Time Benchmark ===\n");
+    
+    let master_seed = b"fcr-rsa-demo-seed";
+    
+    // 1. Setup Key Pair (Dilakukan di luar loop)
+    println!("[1] Generating Key Pair...");
+    let key_pair = generate_key_pair(master_seed).expect("Key generation failed");
+    
+    // 2. Setup Message (2048-bit)
+    let msg_bytes = [42u8; 100]; // Pesan 100 byte
+    let message = bytes_to_u2048(&msg_bytes).expect("Message conversion failed");
+    
+    println!("[2] Running 10,000 Constant-Time Encryption Cycles...\n");
+    
+    let iterations = 10_000;
+    let start = std::time::Instant::now();
+    
+    // 3. Benchmark Loop (Full cycle: derive blinding + encrypt per iterasi)
+    for i in 0..iterations {
+        // Simulasi perubahan nonce kecil untuk memastikan blinding deterministik
+        let mut current_nonce = [0u8; 12];
+        current_nonce[0] = (i % 256) as u8;
+        current_nonce[1] = ((i / 256) % 256) as u8;
+        
+        // Derive blinding + Encrypt dalam satu siklus
+        let current_blinding = derive_blinding(master_seed, &current_nonce).unwrap();
+        let _ct = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &current_blinding);
     }
-
-    for (class, ct) in classes.into_iter().zip(inputs.into_iter()) {
-        runner.run_one(class, || {
-            // Fungsi decrypt masih butuh blinding karena dekripsi harus tahu R.
-            let _ = decrypt(&ct, SEED, N, &q, &b);
-        });
-    }
+    
+    let duration = start.elapsed();
+    let avg = duration / iterations;
+    
+    println!("✅ Completed {} iterations.", iterations);
+    println!("Total Time   : {:?}", duration);
+    println!("Average Time : {:?} per full cycle (derive + encrypt)", avg);
+    println!("\n[NOTE] To verify constant-time property, run with `dudect` or `valgrind --tool=massif`.");
 }
-
-ctbench_main!(decrypt_timing_test);

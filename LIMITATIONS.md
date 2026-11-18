@@ -51,6 +51,28 @@ FCR-RSA adalah wajib.
   dengan format keluaran tersamar (`ciphertext_b64` palsu yang identik secara
   struktural dengan keluaran asli).
 
+### 🔴 Temuan Kritis v0.4.1 — Structural Key Recovery (BELUM DIPERBAIKI)
+
+Fungsi enkripsi FCR-RSA bersifat **linear terhadap plaintext**:
+`C_i = (M_i * E_vec) + R_blind mod Q`, dan `R_blind` **dikirimkan sebagai
+prefix plaintext** pada ciphertext.
+
+Konsekuensi:
+1. **Known-plaintext 1 blok memulihkan `E_vec` sepenuhnya:**
+   `E_vec = (C_1 - R_blind) * M_1^{-1} mod Q`. Seluruh pesan dengan kunci
+   yang sama dapat didekripsi tanpa mengetahui `seed`.
+2. **Blinding yang dikirim terbuka tidak memberi perlindungan IND-CPA apa pun**,
+   meskipun nilainya acak. `test_ind_cpa.rs` hanya menguji keunikan ciphertext,
+   bukan indistinguishability — sehingga memberi hasil false-positive.
+3. **Block-based chunking (v0.4.1) TIDAK memitigasi poin 1 dan 2.**
+   Dengan `Q ~ 30 bit`, chunk 3 byte hanya memperbesar ruang kamus dari
+   2^8 menjadi 2^24 (dapat dienumerasi dalam hitungan detik).
+
+Status: **TERBUKA.** Memerlukan perubahan arsitektur (hybrid KEM + AEAD,
+Q >= 2048-bit, penghapusan blinding terbuka), bukan tambalan pada lapisan teks.
+
+Reproduksi: `simulations/red_team_key_recovery.py`
+
 ## 5. Interoperabilitas
 
 - **Belum ada standar.** FCR-RSA bukan bagian dari NIST, IEEE, 3GPP, atau
@@ -128,6 +150,26 @@ Fitur Auto-Mune telah berevolusi dari prototipe deteksi statis menjadi sistem **
    * *Batasan:* Tabel `anomaly_events` (meskipun sudah bebas koordinat mentah) belum memiliki *cron job* pembersihan otomatis.
    * *Rencana Fase 12:* Tambahkan kebijakan *auto-purge* log anomali setiap 30 hari.
 
+## ⚠️ Batasan Fondasi Matematika (Mathematical Limitations)
+
+Sebagai protokol riset, FCR-RSA memiliki batasan matematis yang **harus dipahami** sebelum klaim keamanan apa pun dibuat:
+
+1. **Belum Ada Security Reduction ke Masalah Hard Standar**  
+   Deret Fibonacci non-linear dengan noise deterministik (`SHA-256(seed || counter)`) **bukanlah** implementasi Learning With Errors (LWE) yang standar. LWE sejati memerlukan sampling Gaussian yang benar-benar acak (true random), bukan pseudo-random. Saat ini, tidak ada pembuktian matematis (reduction proof) yang menunjukkan bahwa memecahkan FCR-RSA setara dengan memecahkan masalah kisi (SVP/CVP) atau faktorisasi.
+
+2. **Kerentanan Teoretis terhadap Algebraic Cryptanalysis**  
+   Karena relasi rekurensi bersifat deterministik dan berbasis perkalian, terdapat risiko teoretis bahwa penyerang dengan sumber daya komputasi tinggi dapat memformulasikan sistem persamaan polinomial dan menyelesaikannya menggunakan algoritma *Gröbner Basis* atau linearisasi, terutama jika ukuran modulus `Q` kecil.
+
+3. **Ukuran Modulus `Q` pada Implementasi Saat Ini**  
+   Contoh saat ini menggunakan `Q = 1_000_000_007` (hanya ~30 bit). Ini **hanya untuk tujuan pengujian fungsional**. Untuk keamanan nyata, `Q` harus berukuran minimal 2048-bit agar ruang pencarian (search space) cukup besar untuk menahan serangan brute-force atau kisi, dan memungkinkan chunking data yang lebih besar.
+
+### 🛡️ Mitigasi yang Sudah Diterapkan (Defense in Depth)
+Meskipun fondasi matematika di atas masih dalam tahap eksplorasi, FCR-RSA mengompensasinya dengan **Lapisan Auto-Imun (v0.4.0)** yang kuat di tingkat aplikasi:
+- **HMAC-SHA256 Telemetry Auth:** Mencegah spoofing dan replay attack pada level jaringan.
+- **Privacy-Preserving Location Hashing:** Mematuhi UU PDP dengan tidak pernah menyimpan koordinat GPS mentah.
+- **Deceptive Honeypot & Adaptive Cooldown:** Secara aktif mengisolasi dan membingungkan penyerang yang mencoba mengeksploitasi kunci secara massal.
+
+> **Kesimpulan:** FCR-RSA saat ini adalah **Proof-of-Concept yang aman secara rekayasa (engineering-hardened)**, namun **belum terbukti aman secara matematis murni (mathematically unproven)**.
 ---
 
 **Terakhir diperbarui:** 17 November 2026

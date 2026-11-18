@@ -1,80 +1,48 @@
-﻿//! Decryption (symmetric, prototype).
+﻿//! Decryption module for FCR-RSA v0.6.0
+//! Fully migrated to U2048 and constant-time operations.
 
-use num_bigint::BigInt;
-use num_traits::Zero;
+use crypto_bigint::U2048;
+use crate::fib::{
+    u2048_to_bytes, derive_blinding, decrypt_with_blinding_ct, FcrKeyPair,
+};
 
-use crate::fib;
-
-/// Decrypt an FCR-RSA ciphertext (Tier B).
+/// Dekripsi ciphertext (dalam bentuk U2048) menggunakan FCR-RSA v0.6.0.
+/// Mengembalikan bytes asli (maksimal 255 byte).
+/// 
+/// # Arguments
+/// * `ciphertext` - Ciphertext yang dienkripsi (tipe U2048).
+/// * `key_pair` - Key pair yang sama dengan yang digunakan saat enkripsi.
+/// * `master_seed` - Seed utama yang sama dengan yang digunakan saat enkripsi.
+/// * `nonce` - Nonce yang sama dengan yang digunakan saat enkripsi (12 byte).
 pub fn decrypt(
-    ciphertext: &BigInt,
-    seed: &[u8],
-    n: usize,
-    q: &BigInt,
-    blinding: &BigInt,
-) -> Result<BigInt, &'static str> {
-    if n < 4 {
-        return Err("n must be >= 4");
-    }
-    if q <= &BigInt::zero() {
-        return Err("q must be positive");
-    }
-    let seq = fib::generate(n, seed, q);
-    let e_vec = &seq[n - 2];
-
-    let mut c = (ciphertext - blinding) % q;
-    if c < BigInt::zero() {
-        c += q;
-    }
-
-    let inv = mod_inverse(e_vec, q)?;
-    let m = (c * inv) % q;
-    Ok(if m < BigInt::zero() { m + q } else { m })
+    ciphertext: &U2048,
+    key_pair: &FcrKeyPair,
+    master_seed: &[u8],
+    nonce: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    // 1. Derive blinding factor yang sama (deterministik)
+    let blinding = derive_blinding(master_seed, nonce)?;
+    
+    // 2. Dekripsi constant-time
+    let message = decrypt_with_blinding_ct(ciphertext, &key_pair.e_vec_inv, &blinding);
+    
+    // 3. Konversi kembali ke bytes
+    let bytes = u2048_to_bytes(&message);
+    
+    // 4. Hapus leading zeros untuk mendapatkan pesan asli
+    // (Aman untuk session seed acak, probabilitas leading zero sangat kecil)
+    let first_non_zero = bytes.iter().position(|&x| x != 0).unwrap_or(bytes.len());
+    
+    Ok(bytes[first_non_zero..].to_vec())
 }
 
-/// Decrypt using Tier A (heavyweight).
-pub fn decrypt_tier_a(
-    ciphertext: &BigInt,
-    seed: &[u8],
-    n: usize,
-    q: &BigInt,
-    blinding: &BigInt,
-) -> Result<BigInt, &'static str> {
-    if n < 4 {
-        return Err("n must be >= 4");
-    }
-    if q <= &BigInt::zero() {
-        return Err("q must be positive");
-    }
-    let seq = fib::generate(n, seed, q);
-    let e_vec = &seq[n - 2];
-    let n_comp = &seq[n - 1];
-
-    let mut c = (ciphertext - n_comp - blinding) % q;
-    if c < BigInt::zero() {
-        c += q;
-    }
-
-    let inv = mod_inverse(e_vec, q)?;
-    let m = (c * inv) % q;
-    Ok(if m < BigInt::zero() { m + q } else { m })
-}
-
-fn mod_inverse(a: &BigInt, m: &BigInt) -> Result<BigInt, &'static str> {
-    use num_traits::One;
-    let (g, x, _) = extended_gcd(a.clone(), m.clone());
-    if g != BigInt::one() {
-        return Err("no modular inverse");
-    }
-    let x = x % m;
-    Ok(if x < BigInt::zero() { x + m } else { x })
-}
-
-fn extended_gcd(a: BigInt, b: BigInt) -> (BigInt, BigInt, BigInt) {
-    use num_traits::{One, Zero};
-    if b.is_zero() {
-        return (a, BigInt::one(), BigInt::zero());
-    }
-    let (g, x, y) = extended_gcd(b.clone(), &a % &b);
-    (g, y.clone(), x - (&a / &b) * y)
+/// Dekripsi langsung mengembalikan U2048 (untuk penggunaan internal/advanced).
+pub fn decrypt_u2048(
+    ciphertext: &U2048,
+    key_pair: &FcrKeyPair,
+    master_seed: &[u8],
+    nonce: &[u8],
+) -> Result<U2048, &'static str> {
+    let blinding = derive_blinding(master_seed, nonce)?;
+    Ok(decrypt_with_blinding_ct(ciphertext, &key_pair.e_vec_inv, &blinding))
 }
