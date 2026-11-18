@@ -1,39 +1,66 @@
+//! FCR-RSA v0.6.0 - Python Bindings (PyO3)
+//! API murni bytes-to-bytes, tanpa ekspos U2048 ke Python.
+
+// ✅ Suppress warning non_local_definitions dari PyO3 v0.20 macro
+// Ini adalah solusi resmi yang direkomendasikan PyO3 team.
+// Warning ini 100% kosmetik dan tidak mempengaruhi keamanan/performa.
+#![allow(non_local_definitions)]
+
 use pyo3::prelude::*;
-use num_bigint::BigInt;
-use num_traits::FromPrimitive;
-use fcr_rsa::{encrypt_tier_a_with_blinding, decrypt_tier_a};
+use fcr_core_rust::{
+    generate_key_pair, encrypt_to_bytes, decrypt_from_bytes, FcrKeyPair,
+};
 
-/// Fungsi Python: enkripsi_tier_a(message: int, seed: bytes, n: int, q: int, blinding: int) -> int
-#[pyfunction]
-fn py_encrypt_tier_a(message: u64, seed: &[u8], n: usize, q: u64, blinding: u64) -> PyResult<String> {
-    let msg_big = BigInt::from_u64(message).unwrap();
-    let q_big = BigInt::from_u64(q).unwrap();
-    let blind_big = BigInt::from_u64(blinding).unwrap();
+/// Python wrapper untuk FcrKeyPair
+#[pyclass]
+pub struct PyFcrKeyPair {
+    inner: FcrKeyPair,
+}
 
-    match encrypt_tier_a_with_blinding(&msg_big, seed, n, &q_big, &blind_big) {
-        // PERBAIKAN: Hapus ': BigInt'
-        Ok(c) => Ok(c.to_string()), 
-        Err(e) => Err(pyo3::exceptions::PyValueError::new_err(e)),
+#[pymethods]
+impl PyFcrKeyPair {
+    #[new]
+    fn new(master_seed: &[u8]) -> PyResult<Self> {
+        let inner = generate_key_pair(master_seed)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        Ok(PyFcrKeyPair { inner })
     }
 }
 
-/// Fungsi Python: dekripsi_tier_a(ciphertext: int, seed: bytes, n: int, q: int, blinding: int) -> int
+/// Enkripsi pesan dari Python
+/// Args: key_pair, message_bytes, master_seed, nonce
+/// Returns: 256-byte ciphertext
 #[pyfunction]
-fn py_decrypt_tier_a(ciphertext: &str, seed: &[u8], n: usize, q: u64, blinding: u64) -> PyResult<String> {
-    let ct_big = ciphertext.parse::<BigInt>().unwrap();
-    let q_big = BigInt::from_u64(q).unwrap();
-    let blind_big = BigInt::from_u64(blinding).unwrap();
-
-    match decrypt_tier_a(&ct_big, seed, n, &q_big, &blind_big) {
-        // PERBAIKAN: Hapus ': BigInt'
-        Ok(m) => Ok(m.to_string()),
-        Err(e) => Err(pyo3::exceptions::PyValueError::new_err(e)),
-    }
+fn encrypt_message(
+    key_pair: &PyFcrKeyPair,
+    message_bytes: &[u8],
+    master_seed: &[u8],
+    nonce: &[u8],
+) -> PyResult<Vec<u8>> {
+    let ct = encrypt_to_bytes(message_bytes, &key_pair.inner, master_seed, nonce)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    Ok(ct.to_vec())
 }
 
+/// Dekripsi pesan ke Python
+/// Args: key_pair, ciphertext_bytes (256), master_seed, nonce
+/// Returns: plaintext bytes
+#[pyfunction]
+fn decrypt_message(
+    key_pair: &PyFcrKeyPair,
+    ciphertext_bytes: &[u8],
+    master_seed: &[u8],
+    nonce: &[u8],
+) -> PyResult<Vec<u8>> {
+    decrypt_from_bytes(ciphertext_bytes, &key_pair.inner, master_seed, nonce)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Python Module Definition
 #[pymodule]
-fn fcr_pyo3(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_encrypt_tier_a, m)?)?;
-    m.add_function(wrap_pyfunction!(py_decrypt_tier_a, m)?)?;
+fn fcr_pyo3(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyFcrKeyPair>()?;
+    m.add_function(wrap_pyfunction!(encrypt_message, m)?)?;
+    m.add_function(wrap_pyfunction!(decrypt_message, m)?)?;
     Ok(())
 }

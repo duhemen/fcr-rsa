@@ -106,6 +106,16 @@ pub fn decrypt_with_blinding_ct(ciphertext: &U2048, e_vec_inv: &U2048, blinding:
     unblinded_res.mul(&inv_res).retrieve()
 }
 
+pub fn decrypt_u2048(
+    ciphertext: &U2048,
+    key_pair: &FcrKeyPair,
+    master_seed: &[u8],
+    nonce: &[u8],
+) -> Result<U2048, &'static str> {
+    let blinding = derive_blinding(master_seed, nonce)?;
+    Ok(decrypt_with_blinding_ct(ciphertext, &key_pair.e_vec_inv, &blinding))
+}
+
 pub fn bytes_to_u2048(bytes: &[u8]) -> Result<U2048, &'static str> {
     if bytes.len() > 256 {
         return Err("Input too large for U2048");

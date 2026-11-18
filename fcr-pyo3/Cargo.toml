@@ -1,6 +1,6 @@
 [package]
-name = "fcr_pyo3"
-version = "0.1.0"
+name = "fcr-pyo3"
+version = "0.6.0"
 edition = "2021"
 
 [lib]
@@ -8,7 +8,5 @@ name = "fcr_pyo3"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
-fcr-rsa = { path = "../fcr-core-rust" }
-num-bigint = "0.4"
-num-traits = "0.2"
+pyo3 = { version = "0.20", features = ["extension-module"] }
+fcr-core-rust = { path = "../fcr-core-rust" }
