@@ -1,6 +1,6 @@
 # Analisis Ancaman Kuantum terhadap FCR-RSA
 
-**Tanggal:** 16 November 2026  
+**Tanggal:** 19 November 2026  
 **Status:** Final (berdasarkan simulasi Qiskit lokal)
 **Environment:** Python 3.12.7, Qiskit 2.6.2, Qiskit-Aer 0.18.2
 
@@ -45,14 +45,24 @@
 
 ---
 
-## 5. Rekomendasi Lanjutan
+## 5. Rekomendasi Lanjutan & Status Roadmap
 
-| # | Aksi | Prioritas |
-|---|------|-----------|
-| 1 | Implementasi oracle FCR-RSA penuh di Qiskit (arithmetic modular) | 🟡 Sedang |
-| 2 | Uji Grover dengan 2^20 (butuh RAM besar) | 🟡 Sedang |
-| 3 | Analisis formal (bukan simulasi) untuk klaim keamanan | 🔴 Tinggi |
-| 4 | Publikasi hasil ini ke whitepaper | 🔴 Tinggi |
+| # | Aksi | Prioritas | Status |
+|---|---|---|---|
+| 1 | Implementasi oracle FCR-RSA penuh di Qiskit (arithmetic modular) | 🟡 Sedang | ⏳ Target Fase 4 |
+| 2 | Uji Grover dengan ruang kunci 2^20 (membutuhkan RAM besar/Colab) | 🟡 Sedang | ⏳ Target Fase 4 |
+| 3 | Analisis formal (bukan simulasi) untuk klaim keamanan | 🔴 Tinggi | ⏳ Target Fase 4 |
+| 4 | Publikasi hasil ini ke whitepaper | 🔴 Tinggi | ✅ Dimulai |
+
+> 📌 **Catatan Roadmap (19 November 2026):** 
+> Simulasi kuantum ini adalah target utama **Fase 4 (Q1 2027)**. 
+> Saat ini, **Fase 3 (Hardening)** dan **Fase 3.5 (Engine + Brutal Test 36/36)** telah **SELESAI 100%**. 
+> Langkah berikutnya adalah menjalankan simulasi Grover/Shor yang lebih kompleks di Google Colab sebagai bukti tambahan untuk whitepaper dan audit independen.
+
+## 6. Referensi
+- Shor, P. W. (1994). Algorithms for quantum computation: discrete logarithms and factoring. FOCS.
+- Grover, L. K. (1996). A fast quantum mechanical algorithm for database search. STOC.
+- NIST PQC Standardization (2024).
 
 ---
 
@@ -64,4 +74,4 @@
 
 ---
 
-**Terakhir diperbarui:** 16 November 2026
+**Terakhir diperbarui:** 19 November 2026
