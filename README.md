@@ -216,12 +216,16 @@ cd fcr-pyo3 && maturin develop --release && python test_pyo3.py
 - [x] Deceptive Honeypot (Poisoned Pill) + `trace_id`
 - [x] Automated Incident Report
 - [x] **Brutal Test Suite 36/36 PASS**
-### ⏳ Fase 4: Validasi Eksternal (Q1 2027) — **TARGET BERIKUTNYA**
-- [ ] Independent security audit
-- [ ] Quantum simulation (Qiskit/Cirq)
-- [ ] Formal verification (Coq/Lean)
-- [ ] Fault injection testing
-- [ ] Test vector resmi publikasi
+
+### ⏳ Fase 4: Validasi Eksternal & Skala Produksi (Target Q1-Q2 2027)
+*(Catatan: Fondasi pengujian internal telah selesai. Fase 4 fokus pada eksternalisasi dan peningkatan skala)*
+- [x] **Test Vector Internal:** 10/10 Cross-Language Match (Python ↔ Rust) ✅ SELESAI
+- [x] **Quantum Simulation (PoC):** Grover ($2^{10}$) & Shor (N kecil) diverifikasi ✅ SELESAI
+- [ ] **Quantum Simulation (Production Scale):** Implementasi oracle  FCR-RSA penuh di Qiskit untuk parameter $2^{256}$. **TARGET BERIKUTNYA**
+- [ ] **Independent Security Audit:** Audit kode dan arsitektur oleh pihak ketiga (external firm).
+- [ ] **Formal Verification:** Pembuktian matematis properti constant-time dan keamanan KEM menggunakan Coq/Lean.
+- [ ] **Hardware Fault Injection Testing:** Pengujian fisik terhadap mitigasi redundant computation.
+- [ ] **Official Test Vector Publication:** Publikasi format test vector sebagai standar referensi komunitas.
 ### ⏳ Fase 5: Publikasi & Adopsi (Q2 2027)
 ---
 ## 🤝 11. Panggilan Kolaborasi
