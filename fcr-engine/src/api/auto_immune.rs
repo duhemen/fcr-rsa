@@ -34,7 +34,6 @@ pub fn hash_location_grid(api_key_id: i64, lat: f64, lon: f64) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Evaluasi token dan hitung Risk Score (0-100) tanpa menyimpan koordinat mentah.
 pub fn evaluate_risk(
     api_key_id: i64,
     current: &SpatiotemporalToken,
@@ -43,7 +42,6 @@ pub fn evaluate_risk(
     let mut score = 0;
     let mut reasons = Vec::new();
     let mut estimated_distance_km = 0.0;
-
     let current_loc_hash = hash_location_grid(api_key_id, current.gps_lat, current.gps_lon);
 
     // 1. Cek Latency (Hardened)
@@ -57,17 +55,15 @@ pub fn evaluate_risk(
     // 2. Cek Perubahan Zona Lokasi (Hash Comparison) & Timestamp
     if let Some(last) = last {
         let dt = (current.timestamp - last.timestamp).num_seconds() as f64;
-
         if dt < -300.0 {
             score += 30;
             reasons.push(format!("timestamp anomaly: {:.0}s drift", dt));
         } else if dt >= 0.0 {
-            // Jika hash grid berubah dalam waktu singkat (< 30 menit / 1800 detik)
-            // berarti terjadi perpindahan antar-zona (> ~11 km) secara tidak wajar
             if !last.loc_hash.is_empty() && current_loc_hash != last.loc_hash {
-                estimated_distance_km = 15.0; // Estimasi batas bawah lintas grid
+                estimated_distance_km = 15.0; 
                 if dt < 60.0 {
-                    score += 55;
+                    // ✅ PERBAIKAN 2: Naikkan skor dari 55 ke 75 agar memicu threshold >= 70
+                    score += 75; 
                     reasons.push(format!("impossible zone jump in {:.0}s", dt));
                 } else if dt < 1800.0 {
                     score += 30;
@@ -83,10 +79,6 @@ pub fn evaluate_risk(
         risk_score: score.min(100),
         distance_km: estimated_distance_km,
         current_loc_hash,
-        reason: if reasons.is_empty() {
-            None
-        } else {
-            Some(reasons.join("; "))
-        },
+        reason: if reasons.is_empty() { None } else { Some(reasons.join("; ")) },
     }
 }

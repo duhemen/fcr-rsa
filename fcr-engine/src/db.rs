@@ -137,16 +137,18 @@ pub async fn log_anomaly(
     details: &str,
     risk_score: u32,
     distance_km: f64,
+    trace_id: &str, // <-- TAMBAHKAN PARAMETER INI
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO anomaly_events (api_key_id, event_type, details, risk_score, distance_km) 
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO anomaly_events (api_key_id, event_type, details, risk_score, distance_km, trace_id)
+         VALUES ($1, $2, $3, $4, $5, $6)", // <-- TAMBAHKAN $6 DI SINI
     )
     .bind(api_key_id)
     .bind(event_type)
     .bind(details)
     .bind(risk_score as i32)
     .bind(distance_km)
+    .bind(trace_id) // <-- SIMPAN TRACE_ID KE DATABASE
     .execute(pool)
     .await?;
     Ok(())
