@@ -21,6 +21,8 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct AuthInfo {
     pub user_name: String,
     pub key_prefix: String,
+    pub risk_score: u32,
+    pub risk_reason: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,12 +83,13 @@ pub async fn require_api_key(
         .map(|(loc_hash, ts)| crate::api::auto_immune::LastLocationState { loc_hash, timestamp: ts });
 
     let anomaly = crate::api::auto_immune::evaluate_risk(record.id, &token, last_state.as_ref());
+    let risk_reason = anomaly.reason.clone(); 
 
     let _ = db::update_last_state(&state.pool, record.id, &anomaly.current_loc_hash, token.timestamp).await;
 
     // Risk Score >= 70 → Cooldown + SUNTIKKAN HoneypotContext (bukan short-circuit!)
     if anomaly.risk_score >= 70 {
-        let reason = anomaly.reason.unwrap_or_else(|| "high risk score".into());
+        let reason = anomaly.reason.clone().unwrap_or_else(|| "high risk score".into());
         let trace_id = format!("TRC-{}", chrono::Utc::now().timestamp_millis());
         
         // 1. Simpan ke Database DENGAN trace_id
@@ -97,7 +100,7 @@ pub async fn require_api_key(
             &reason,
             anomaly.risk_score,
             anomaly.distance_km,
-            &trace_id, // <-- KIRIM TRACE_ID KE FUNGSI DB
+            &trace_id,
         ).await;
         
         // 2. Terapkan Cooldown
@@ -135,12 +138,13 @@ pub async fn require_api_key(
         db::touch_api_key(&pool, id).await;
     });
 
-    // 6. Inject AuthInfo
+    // 6. Inject AuthInfo (DIPERBARUI)
     request.extensions_mut().insert(AuthInfo {
         user_name: record.user_name,
         key_prefix: record.key_prefix,
+        risk_score: anomaly.risk_score,       // ✅ OPER SKOR DARI ANOMALI
+        risk_reason: risk_reason,  // ✅ OPER ALASAN DARI ANOMALI
     });
-
     Ok(next.run(request).await)
 }
 

@@ -143,15 +143,37 @@ pub async fn encrypt(
         }
     };
 
+    // ✅ PERBARUI LOG: Tambahkan info risk_score agar console log lebih informatif
     println!(
-        "[encrypt] user={} key_prefix={} key='{}' blocks={} tier={} honeypot={}",
-        auth.user_name, auth.key_prefix, req.key_name, text.len(), req.tier, is_honeypot
+        "[encrypt] user={} key_prefix={} key='{}' blocks={} tier={} honeypot={} risk={} ({:?})",
+        auth.user_name, 
+        auth.key_prefix, 
+        req.key_name, 
+        text.len(), 
+        req.tier, 
+        is_honeypot,
+        auth.risk_score,       // <-- TAMBAHKAN INI
+        auth.risk_reason       // <-- TAMBAHKAN INI (menggunakan {:?} karena bertipe Option<String>)
     );
 
-    Json(EncryptResponse {
+    // ✅ OBSERVABILITY GAP FIX: Buat HeaderMap kustom
+    let mut headers = axum::http::HeaderMap::new();
+    
+    // Jika skor di rentang mencurigakan (40-69), tambahkan header peringatan
+    if auth.risk_score >= 40 && auth.risk_score < 70 {
+        headers.insert(
+            "X-FCR-Risk-Indicator", 
+            "review_recommended".parse().unwrap()
+        );
+    }
+
+    // ✅ Return Tuple (Headers, Json) - Idiomatic Axum 0.7
+    let response_body = Json(EncryptResponse {
         ciphertext_b64: B64.encode(ct.as_bytes()),
         blocks: text.len(),
-    }).into_response()
+    });
+    
+    (headers, response_body).into_response()
 }
 
 // ============================================================
