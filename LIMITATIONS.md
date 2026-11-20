@@ -4,7 +4,7 @@ Dokumen ini jujur tentang batasan FCR-RSA. Membacanya sebelum menggunakan
 FCR-RSA adalah wajib.
 
 **Versi:** 0.6.0 + Fase 3.5 (Engine Integration)  
-**Terakhir diperbarui:** 19 November 2026
+**Terakhir diperbarui:** 20 November 2026
 
 ---
 
