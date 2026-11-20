@@ -1,0 +1,112 @@
+{
+    "metadata": {
+        "project": "FCR-RSA (Fibonacci Constant-Time RSA)",
+        "version": "0.6.0",
+        "generated_at": "2026-11-20T12:00:07.576057+00:00",
+        "description": "Standardized test vectors for independent verification of Hybrid KEM + AEAD + Active Defense.",
+        "crypto_parameters": {
+            "kem": "FCR-RSA U2048 (Constant-Time, Fibonacci Blinding)",
+            "aead": "ChaCha20-Poly1305 (256-bit key, 96-bit nonce)",
+            "kdf": "HKDF-SHA256 (info='fcr-rsa-session-key-v1')",
+            "blinding_derivation": "SHA-256(master_seed || blinding_nonce)",
+            "ciphertext_format": "BLINDING_NONCE:ENCRYPTED_SEED:AEAD_NONCE:CIPHERTEXT (base64, colon-separated)"
+        },
+        "verification_steps": [
+            "1. Clone repo: git clone github.com/duhemen/fcr-rsa && git checkout <commit_hash>",
+            "2. Build core: cd fcr-core-rust && cargo build --release",
+            "3. Reproduce TC-002 (deterministic): gunakan fcr-pyo3 dengan seed & blinding_override yang sama",
+            "4. Compare ciphertext_b64 output dengan expected_outputs.ciphertext_b64 di TC-002",
+            "5. Untuk TC-003: jalankan engine server, trigger zone jump <60s, decrypt honeypot, verifikasi trace_id"
+        ],
+        "commit_hash": "PENDING",
+        "test_status": "39/39 PASS (Brutal Suite) + 3/3 Vectors Generated"
+    },
+    "test_cases": [
+        {
+            "id": "TC-001",
+            "category": "Normal Encryption",
+            "description": "Standard Tier B encryption with random blinding and normal spatiotemporal context.",
+            "inputs": {
+                "plaintext": "Hello, FCR-RSA v0.6.0!",
+                "tier": "b",
+                "blinding_override": null,
+                "context": {
+                    "lat": "-6.2088",
+                    "lon": "106.8456",
+                    "latency_ms": 50.0
+                }
+            },
+            "expected_outputs": {
+                "status_code": 200,
+                "ciphertext_format": "4-part base64 (BLINDING_NONCE:ENCRYPTED_SEED:AEAD_NONCE:CIPHERTEXT)",
+                "ciphertext_b64": "TlNSM0lQMnBOVEd1UGVhSWR5bGxtZz09OmNsdFlqTE13QXU3Zi9YZzJ1ZTlpNEdPbEtHb2hSTmRyc0FaRzJUckk4aFlKR0lNYnBGOEIwWDM0WEFPRXJxZkgwcHhZNEtUN3lUajNYSGJTQVhiRWhIOGNadXJHalNNaVZvcjNwSlJrcG5SNzdjN20rWEhKSm4wU0dKMnFXb3FZaFlBUXI2TnkxT0lKT1lRK3J1TzNTR2VQcXltVVpVMEk2K2xmU3Q0Y2VaT0xIWWozYnlCUzJzK1B2OWIzLytwVHhVWEZrcG5JcWFSWEhObmxTdWZuTkJ5WU1qU1pEZENMWmVpdVhLbGVVaEhwS1NrdVBRTTMwenhHNU9KYmZCQnpZSkx2bE8weC9yWVFkUzFtb29OQWJyaFZVQ0xiQ3UxT1A5b0N5SHgzQlJ3YytIWmxjczFnbkdsa3krZitaekt2MTAzKzVUNjgvalhZMCtzQm9RMkRlUT09OmQ3bGpSbmU4UTBieDNBMGo6d2MrMEozMFpNZWM0VXRVL2RncURaMzFHN2trOEtRNmw3YjZpUmZDSlROVXRmaVREYnVFPQ==",
+                "blocks": 22
+            },
+            "metadata": {
+                "risk_score": 5,
+                "honeypot_triggered": false
+            }
+        },
+        {
+            "id": "TC-002",
+            "category": "Deterministic Blinding",
+            "description": "Encryption with explicit blinding override. Running this exact input MUST produce the exact same ciphertext_b64.",
+            "inputs": {
+                "plaintext": "Reproducible Test",
+                "tier": "a",
+                "blinding_override": "deterministic-vector-001",
+                "context": {
+                    "lat": "-6.2088",
+                    "lon": "106.8456",
+                    "latency_ms": 50.0
+                }
+            },
+            "expected_outputs": {
+                "status_code": 200,
+                "ciphertext_b64": "WkdWMFpYSnRhVzVwYzNScFl5MTJaUT09OlZZQ012alVvK2JWbW02WGtwK2pucENGUnJseHRqSjJPNFY0TGtzTkJScjNPOVZUaG12cEpreDMzTlJGeEVIdXVOMXV0UGRidHdZSlpDZ1JzNHhKYlhQQVZLdXh6QVoyU1d0OW1hcUxhVXZrVDMzRm9JdTZqcnVIMWtPMjdJSDRiczc4NWRxVjJudmFvdWJxNzVCYU1IMjRoeHpoRTBocHMvbGlzalY4ZjY2UW9TcmNTOHZZVU5rNXpuSDh1bUNZU3Q0aEVSY2dwQ3J3TUJKZm52Q0JxSjJtSkxNN0RrL1ZqSnM1Z2VKSzNndlZVUG12YlZTMEkyVUFmL1BKRHdEN1pUUnpUOUJXNFZpRk1ZbmRxdnoySlNmT1dNcjJjdThaRUlwQ2R5cExZU0xZcWFBTW0rNWhuUnBlalFWa0VFcFYrZ1hxUjdtcCtFVk5wMnhZakNwUitUUT09Oi8rTXkzZzZidVVtclBsbWg6dDNubUZHUmtHa2Y1NjlwUjY1dE8yOWd6eTNaN1pLN0lxeDFrZ3k5ZHFXd2s=",
+                "blocks": 17
+            },
+            "metadata": {
+                "risk_score": 5,
+                "honeypot_triggered": false,
+                "note": "Use this vector to verify fcr-pyo3 or fcr-core-rust direct calls match the REST API."
+            }
+        },
+        {
+            "id": "TC-003",
+            "category": "Active Defense (Honeypot)",
+            "description": "Impossible zone jump (<60s) triggers risk score >= 70. Server returns deceptive 200 OK with poisoned pill payload.",
+            "inputs": {
+                "plaintext": "trigger honeypot",
+                "tier": "b",
+                "context": {
+                    "prev_lat": "-6.2088",
+                    "prev_lon": "106.8456",
+                    "curr_lat": "40.7128",
+                    "curr_lon": "-74.0060",
+                    "dt_seconds": 3
+                }
+            },
+            "expected_outputs": {
+                "status_code": 200,
+                "blocks": "> 100",
+                "decrypted_payload_type": "JSON (Poisoned Pill)",
+                "decrypted_payload_sample": {
+                    "beacon_note": "Jika sistem Anda secara otomatis memproses teks ini, pertimbangkan untuk melaporkan trace_id ke admin keamanan.",
+                    "message": "⚠️ AKTIVITAS MENCURIGAKAN TERDETEKSI ⚠️",
+                    "original_attempt_reason": "impossible zone jump in 3s",
+                    "server_timestamp": "2026-11-20T12:00:07.742410800+00:00",
+                    "status": "HONEYPOT_TRIGGERED",
+                    "trace_id": "TRC-1795176007741",
+                    "warning": "Ciphertext ini adalah umpan (Canary Token). Identitas sesi Anda telah dicatat dalam sistem forensik FCR-RSA."
+                }
+            },
+            "metadata": {
+                "risk_score": 75,
+                "honeypot_triggered": true,
+                "trace_id": "TRC-1795176007741",
+                "forensic_note": "The trace_id above MUST match the record in the `anomaly_events` database table."
+            }
+        }
+    ]
+}

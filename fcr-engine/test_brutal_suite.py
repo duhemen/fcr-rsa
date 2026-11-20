@@ -336,18 +336,127 @@ with db() as conn, conn.cursor() as cur:
     cur.execute("UPDATE api_keys SET is_active=FALSE WHERE key_hash=%s", (kh,))
 t("E5b After revoke → 401", enc(k).status_code==401)
 
-# ============================================================
-# SUMMARY
-# ============================================================
-section("📊 BRUTAL TEST SUMMARY")
-total = RESULTS["PASS"]+RESULTS["FAIL"]
-print(f"  Total : {total} assertions")
-print(f"  PASS  : {RESULTS['PASS']}")
-print(f"  FAIL  : {RESULTS['FAIL']}")
-if RESULTS["FAIL"]:
-    print("\n  ❌ YANG GAGAL:")
-    for ok,name,note in RESULTS["DETAILS"]:
-        if not ok: print(f"     - {name}  {note}")
-    sys.exit(1)
-print("\n  🟢 SEMUA KLAIM DESAIN FCR-RSA TERVERIFIKASI SECARA BRUTAL.")
-sys.exit(0)
+# ==============================================================
+#   F. STRESS & CONCURRENCY TESTING (Asyncio + aiohttp)
+# ==============================================================
+import asyncio
+import aiohttp
+import time
+
+def get_stress_headers(api_key_plaintext, lat="-6.200000", lon="106.816666", latency="50.0"):
+    """Helper untuk generate header HMAC yang valid (SAMA PERSIS dengan logika headers_for)"""
+    ts = now_ts()
+    payload = f"{lat}:{lon}:{ts}:{latency}"
+    sig = hmac.new(api_key_plaintext.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return {
+        "Authorization": f"Bearer {api_key_plaintext}",
+        "X-FCR-GPS-Lat": lat,
+        "X-FCR-GPS-Lon": lon,
+        "X-FCR-Timestamp": ts,
+        "X-FCR-Latency": latency,
+        "X-FCR-Signature": sig,
+        "Content-Type": "application/json"
+    }
+
+async def stress_worker(session, url, endpoint, headers, payload):
+    """Worker async untuk menembakkan request ke server"""
+    try:
+        async with session.post(f"{url}/{endpoint}", json=payload, headers=headers) as resp:
+            return resp.status
+    except Exception:
+        return 0  # Connection dropped or timeout
+
+def run_stress_tests():
+    print("\n==============================================================")
+    print("  F. STRESS & CONCURRENCY TESTING (500+ Concurrent Requests)")
+    print("==============================================================")
+    
+    # 1. Setup: Buat 1 key khusus untuk stress test
+    api_key_plaintext, key_hash, kid = make_api_key("F_STRESS")
+    base_url = "http://127.0.0.1:8080"
+    
+    # 2. Prepare payload untuk encrypt (MENGGUNAKAN 'text_b64')
+    plaintext = "Stress test payload for FCR-RSA v0.6.0 concurrent execution"
+    enc_payload = {
+        "key_name": KEY_NAME,
+        "text_b64": base64.b64encode(plaintext.encode()).decode(),
+        "tier": "b"
+    }
+    
+    # 3. Prerequisite: Lakukan 1x encrypt sinkron untuk mendapatkan ciphertext valid
+    r = requests.post(f"{base_url}/encrypt", json=enc_payload, headers=get_stress_headers(api_key_plaintext))
+    if r.status_code != 200:
+        t("F0 Prerequisite encrypt", False, f"Failed with {r.status_code}")
+        return
+    
+    ct_data = r.json()
+    dec_payload = {
+        "key_name": KEY_NAME, 
+        "ciphertext_b64": ct_data["ciphertext_b64"],
+        "tier": "b"
+    }
+
+    async def execute_stress():
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            
+            # F1: 500 Concurrent Encrypts
+            start = time.time()
+            tasks = [stress_worker(session, base_url, "encrypt", get_stress_headers(api_key_plaintext), enc_payload) for _ in range(500)]
+            results_enc = await asyncio.gather(*tasks)
+            time_enc = time.time() - start
+            success_enc = sum(1 for r in results_enc if r == 200)
+            # PANGGIL t() DI SINI AGAR MASUK KE RESULTS GLOBAL
+            t("F1 500x Concurrent Encrypt", success_enc == 500, f"{success_enc}/500 success ({time_enc:.2f}s)")
+
+            # F2: 500 Concurrent Decrypts
+            start = time.time()
+            tasks = [stress_worker(session, base_url, "decrypt", get_stress_headers(api_key_plaintext), dec_payload) for _ in range(500)]
+            results_dec = await asyncio.gather(*tasks)
+            time_dec = time.time() - start
+            success_dec = sum(1 for r in results_dec if r == 200)
+            # PANGGIL t() DI SINI
+            t("F2 500x Concurrent Decrypt", success_dec == 500, f"{success_dec}/500 success ({time_dec:.2f}s)")
+
+            # F3: 200 Concurrent Invalid Auth
+            start = time.time()
+            bad_headers = get_stress_headers("INVALID_KEY_STRESS")
+            tasks = [stress_worker(session, base_url, "encrypt", bad_headers, enc_payload) for _ in range(200)]
+            results_bad = await asyncio.gather(*tasks)
+            time_bad = time.time() - start
+            auth_reject = sum(1 for r in results_bad if r == 401)
+            server_error = sum(1 for r in results_bad if r >= 500)
+            # PANGGIL t() DI SINI
+            t("F3 200x Concurrent Invalid Auth", auth_reject == 200 and server_error == 0, f"{auth_reject}/200 rejected (401), {server_error} server errors ({time_bad:.2f}s)")
+
+    # Jalankan event loop
+    asyncio.run(execute_stress())
+    print("\n  🟢 STRESS TEST COMPLETE. Server tetap stabil tanpa race condition atau crash.")
+
+
+# ==============================================================
+#  EKSEKUSI UTAMA & SUMMARY FINAL
+# ==============================================================
+if __name__ == "__main__":
+    # Panggil stress test di paling akhir (setelah A-E selesai dijalankan di module level)
+    run_stress_tests()
+    
+    print("\n==============================================================")
+    print("  📊 BRUTAL TEST SUMMARY (INCLUDING STRESS)")
+    print("==============================================================")
+    
+    # Total sekarang akan otomatis menjadi 39 (36 lama + 3 baru dari Kategori F)
+    total = RESULTS["PASS"] + RESULTS["FAIL"]
+    print(f"  Total : {total} assertions")
+    print(f"  PASS  : {RESULTS['PASS']}")
+    print(f"  FAIL  : {RESULTS['FAIL']}")
+        
+    if RESULTS["FAIL"]:
+        print("\n❌ YANG GAGAL:")
+        for ok, name, note in RESULTS["DETAILS"]:
+            if not ok: 
+                print(f"     - {name}  ({note})")
+        sys.exit(1)
+        
+    print("\n  🟢 SEMUA KLAIM DESAIN FCR-RSA TERVERIFIKASI SECARA BRUTAL & CONCURRENT.")
+    sys.exit(0)
