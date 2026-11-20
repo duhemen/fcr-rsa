@@ -96,7 +96,15 @@ Ketika Auto-Mune mendeteksi serangan (Risk Score ≥ 70), server mengembalikan H
 - **Auto-Mune Scoring:** < 1 ms
 - **HMAC Verification:** < 1 ms
 
-*Diukur pada Intel i7-12700K, PostgreSQL 14, release build.*
+> **⚙️ Environment Pengujian:**
+> *   **Perangkat:** Laptop High-Performance
+> *   **CPU:** Intel Core i9 Gen 13 (Mobile)
+> *   **RAM:** 16 GB DDR5
+> *   **GPU:** NVIDIA RTX 4060 8 GB
+> *   **Database:** PostgreSQL 14
+> *   **Build Mode:** `cargo build --release`
+>
+> *Catatan: Hasil benchmark pada perangkat Desktop (misal: i7-12700K) atau Server mungkin menunjukkan latensi yang lebih rendah karena perbedaan arsitektur cache dan thermal headroom.*
 
 ### ⚠️ Yang Belum Diukur
 - **Benchmark pada Perangkat Target:** Belum diuji pada server bank, IoT, atau mobile devices.
