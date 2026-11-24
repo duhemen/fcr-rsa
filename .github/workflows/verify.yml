@@ -16,11 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install elan (Lean toolchain manager)
-        run: |
-          curl https://lean-lang.org -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.36.0
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          
+      - name: Setup Lean 4
+        uses: leanprover/lean-action@v1
+        with:
+          lean-version: leanprover/lean4:v4.36.0
+
       - name: Build Formal Proofs & Generate Vectors
         working-directory: formal-verification
         run: |
