@@ -58,3 +58,9 @@ Thumbs.db
 secrets/
 # Catatan pribadi
 coretan.md
+
+**/.lake/
+target/
+
+**/.lake/
+target/

@@ -1,20 +1,40 @@
 //! Database helpers: koneksi pool, record structs, query.
 
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::{FromRow, PgPool, Row};
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct KeyRecord {
     pub seed: String,
     pub n: i32,
     pub q: String,
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+impl<'r> FromRow<'r, PgRow> for KeyRecord {
+    fn from_row(row: &'r PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            seed: row.try_get("seed")?,
+            n: row.try_get("n")?,
+            q: row.try_get("q")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ApiKeyRecord {
     pub id: i64,
     pub user_name: String,
     pub key_prefix: String,
+}
+
+impl<'r> FromRow<'r, PgRow> for ApiKeyRecord {
+    fn from_row(row: &'r PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            user_name: row.try_get("user_name")?,
+            key_prefix: row.try_get("key_prefix")?,
+        })
+    }
 }
 
 /// Buat pool koneksi PostgreSQL.
