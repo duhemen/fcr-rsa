@@ -4,7 +4,7 @@ defaultTargets = ["FcrFormal"]
 
 [[lean_lib]]
 name = "FcrFormal"
-globs = ["FcrConstantTime"]
+roots = ["FcrConstantTime"]
 
 [[require]]
 name = "std"

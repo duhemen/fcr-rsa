@@ -18,7 +18,7 @@ def main : IO Unit := do
   let Q : Nat := 1000000007  -- prima, > 2
   IO.println "kind,choice,a,b,res"
   for i in List.range 2048 do
-    let i_u64 : UInt64 := UInt64.ofNat i
+    let i_u64 : UInt64 := i.toUInt64
     let c : UInt64 := (mix i_u64) &&& 1
     let a : UInt64 := mix (i_u64 * 3 + 1)
     let b : UInt64 := mix (i_u64 * 3 + 2)

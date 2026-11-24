@@ -18,8 +18,9 @@ jobs:
 
       - name: Install elan (Lean toolchain manager)
         run: |
-          curl https://githubusercontent.com -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.36.0
+          curl https://lean-lang.org -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.36.0
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
 
       - name: Build Formal Proofs & Generate Vectors
         working-directory: formal-verification
@@ -27,7 +28,7 @@ jobs:
           echo "🔍 Memverifikasi teorema Lean 4..."
           rm -rf .lake lake-manifest.json
           lake build
-          lean --run DumpVectors.lean > ../fcr-core-rust/tests/test_vectors.csv
+          lake env lean --run DumpVectors.lean > ../fcr-core-rust/tests/test_vectors.csv
           echo "✅ Lean 4 proofs & 2,560 test vectors verified!"
 
       - name: Upload Lean 4 Test Vectors
