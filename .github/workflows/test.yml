@@ -62,18 +62,22 @@ jobs:
         with:
           python-version: "3.11"
       - name: Build & Install fcr-pyo3 via Maturin
-        working-directory: fcr-pyo3
         run: |
-          pip install maturin pytest
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip maturin pytest
+          cd fcr-pyo3
           maturin develop --release
           if [ -f "test_pyo3.py" ]; then python test_pyo3.py; fi
       - name: Run Differential Equivalence Gate (Lean <-> Python <-> Rust)
         run: |
+          source .venv/bin/activate
           GATE_SCRIPT=$(find . -name "*equivalence*gate*.py" -o -name "*differential*.py" | head -n 1)
           if [ -n "$GATE_SCRIPT" ]; then
             echo "Menjalankan $GATE_SCRIPT..."
             python "$GATE_SCRIPT"
           fi
+
 
   # ============================================================
   # 4. QUANTUM SIMULATIONS (Qiskit QFT Blinding & Grover Oracle)
@@ -87,7 +91,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Qiskit & Scientific Stack
-        run: pip install numpy matplotlib qiskit qiskit-aer
+        run: pip install numpy scipy sympy scikit-learn matplotlib qiskit qiskit-aer
       - name: Run Quantum Blinding & Grover Scripts
         run: |
           for script in $(find simulations -name "*.py" | sort); do
