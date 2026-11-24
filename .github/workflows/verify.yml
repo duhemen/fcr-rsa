@@ -10,7 +10,7 @@ jobs:
   # ============================================================
   # 1. Formal Verification (Lean 4 v4.36.0)
   # ============================================================
-  formal-verification:
+    formal-verification:
     name: Lean 4 Theorem Proving
     runs-on: ubuntu-latest
     steps:
@@ -19,7 +19,8 @@ jobs:
       - name: Setup Lean 4
         uses: leanprover/lean-action@v1
         with:
-          lean-version: leanprover/lean4:v4.36.0
+          lake-package-directory: formal-verification
+          build: false
 
       - name: Build Formal Proofs & Generate Vectors
         working-directory: formal-verification
