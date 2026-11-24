@@ -25,7 +25,7 @@ API_URL   = "http://localhost:8080"
 DB_URL    = os.environ.get("DATABASE_URL",
             "postgresql://postgres:PASSWORD_ANDA@127.0.0.1:5432/fcr_rsa")
 KEY_NAME  = "test-key-1"          # pastikan sudah ada di DB (keygen kemarin)
-ENGINE_DIR= r"C:\FCR_RSA\fcr-engine"
+ENGINE_DIR= os.environ.get("ENGINE_DIR", os.path.dirname(os.path.abspath(__file__)))
 NORMAL_TEXT = "Halo Dunia, ini adalah rahasia!"   # 42 byte
 NORMAL_LAT, NORMAL_LON = "-6.2088", "106.8456"    # Jakarta
 NY_LAT,   NY_LON       = "40.7128", "-74.0060"    # New York
