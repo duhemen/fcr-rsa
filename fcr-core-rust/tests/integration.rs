@@ -1,8 +1,8 @@
-//! FCR-RSA v0.6.0 Integration Tests
+//! FCR-RSA v0.6.1 Integration Tests
 //! Test suite komprehensif untuk Q 2048-bit
 
-use crypto_bigint::modular::runtime_mod::{DynResidue, DynResidueParams};
-use crypto_bigint::{Zero, U2048};
+use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
+use crypto_bigint::{Odd, U2048};
 use fcr_core_rust::{
     bytes_to_u2048, decrypt_with_blinding_ct, derive_blinding, encrypt_with_blinding_ct,
     fibonacci_nonlinear_with_lwe, gaussian_map, generate_key_pair, max_seed_bytes, u2048_to_bytes,
@@ -11,9 +11,10 @@ use fcr_core_rust::{
 
 /// Helper: Verifikasi perkalian modular menggunakan DynResidue (sama seperti di fib.rs)
 fn verify_mul_mod(a: &U2048, b: &U2048, expected: &U2048) -> bool {
-    let params = Option::from(DynResidueParams::new(&Q_2048)).expect("Q must be odd");
-    let a_res = DynResidue::new(a, params);
-    let b_res = DynResidue::new(b, params);
+    let odd_q = Odd::new(Q_2048).unwrap();
+    let params = FixedMontyParams::new(odd_q);
+    let a_res = FixedMontyForm::new(a, &params);
+    let b_res = FixedMontyForm::new(b, &params);
     let product = a_res.mul(&b_res).retrieve();
     &product == expected
 }

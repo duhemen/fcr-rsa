@@ -1,12 +1,12 @@
-//! FCR Core - Gaussian Integer Mapping (v0.6.0 Simplified)
+//! FCR Core - Gaussian Integer Mapping (v0.6.1-hardened)
 
-use crypto_bigint::U2048;
-use crypto_bigint::modular::runtime_mod::{DynResidue, DynResidueParams};
+use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
+use crypto_bigint::{Odd, U2048};
 
 pub fn map_gaussian(value: &U2048, q: &U2048) -> U2048 {
-    // SOLUSI FINAL v0.5.5: Gunakan DynResidue
-    let params = Option::from(DynResidueParams::new(q)).expect("Modulus must be odd");
-    let val_res = DynResidue::new(value, params);
+    let odd_q = Option::from(Odd::new(*q)).expect("Modulus must be odd");
+    let params = FixedMontyParams::new(odd_q);
+    let val_res = FixedMontyForm::new(value, &params);
     val_res.square().retrieve()
 }
 

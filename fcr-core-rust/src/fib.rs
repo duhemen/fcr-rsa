@@ -1,8 +1,8 @@
-//! FCR Core - Mathematical Foundation (v0.6.0)
-//! Upgrade: Q 2048-bit dengan constant-time operations via Montgomery Arithmetic (v0.5.5 compatible)
+//! FCR Core - Mathematical Foundation (v0.6.1-hardened)
+//! Upgrade: Q 2048-bit dengan constant-time operations via Montgomery Arithmetic (crypto-bigint v0.7.11)
 
-use crypto_bigint::{U2048, NonZero, Zero, Encoding};
-use crypto_bigint::modular::runtime_mod::{DynResidue, DynResidueParams};
+use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
+use crypto_bigint::{NonZero, Odd, U2048};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -14,11 +14,15 @@ pub const Q_2048: U2048 = U2048::from_be_hex(
      98DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB\
      9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B\
      E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF695581718\
-     3995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF"
+     3995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF",
 );
 
 fn q_nz() -> NonZero<U2048> {
     NonZero::new(Q_2048).unwrap()
+}
+
+fn q_odd() -> Odd<U2048> {
+    Odd::new(Q_2048).unwrap()
 }
 
 /// Masking constant-time: mengubah bit kontrol (0 atau 1) menjadi mask 0x0 atau 0xFFFFFFFFFFFFFFFF.
@@ -37,7 +41,6 @@ pub fn ct_select_limb(choice: u64, a: u64, b: u64) -> u64 {
     b ^ (mask & (a ^ b))
 }
 
-
 pub struct FcrKeyPair {
     pub e_vec: U2048,
     pub e_vec_inv: U2048,
@@ -52,18 +55,19 @@ pub fn generate_key_pair(master_seed: &[u8]) -> Result<FcrKeyPair, &'static str>
     let mut e_vec_bytes = [0u8; 256];
     hk.expand(b"fcr-rsa-e-vec-v1", &mut e_vec_bytes)
         .map_err(|_| "HKDF expand failed")?;
-    
+
     let e_vec = U2048::from_be_slice(&e_vec_bytes).rem(&q_nz());
-    
-    if e_vec.is_zero().into() {
+
+    if bool::from(e_vec.is_zero()) {
         return Err("Generated E_vec is zero");
     }
-    
-    let (e_vec_inv, is_some) = e_vec.inv_mod(&Q_2048);
-    if !bool::from(is_some) {
+
+    let inv_opt = e_vec.invert_mod(&q_nz());
+    if !bool::from(inv_opt.is_some()) {
         return Err("Modular inverse does not exist");
     }
-    
+    let e_vec_inv = inv_opt.unwrap();
+
     Ok(FcrKeyPair { e_vec, e_vec_inv })
 }
 
@@ -71,20 +75,20 @@ pub fn fibonacci_nonlinear_with_lwe(n: u64, seed: &U2048, q: &U2048) -> U2048 {
     let mut a = U2048::ONE;
     let mut b = U2048::ONE;
     let q_nonzero = NonZero::new(*q).unwrap();
-    
+
     for _ in 2..n {
         let next = a.add_mod(&b, &q_nonzero);
         a = b;
         b = next;
     }
-    
+
     b.add_mod(seed, &q_nonzero)
 }
 
 pub fn gaussian_map(value: &U2048, q: &U2048) -> U2048 {
-    // SOLUSI FINAL v0.5.5: Gunakan DynResidue untuk Montgomery reduction
-    let params = Option::from(DynResidueParams::new(q)).expect("Modulus must be odd");
-    let val_res = DynResidue::new(value, params);
+    let odd_q = Option::from(Odd::new(*q)).expect("Modulus must be odd");
+    let params = FixedMontyParams::new(odd_q);
+    let val_res = FixedMontyForm::new(value, &params);
     val_res.square().retrieve()
 }
 
@@ -92,34 +96,32 @@ pub fn derive_blinding(master_seed: &[u8], nonce: &[u8]) -> Result<U2048, &'stat
     let mut ikm = Vec::with_capacity(master_seed.len() + nonce.len());
     ikm.extend_from_slice(master_seed);
     ikm.extend_from_slice(nonce);
-    
+
     let hk = Hkdf::<Sha256>::new(None, &ikm);
     let mut blinding_bytes = [0u8; 256];
     hk.expand(b"fcr-rsa-blinding-v1", &mut blinding_bytes)
         .map_err(|_| "HKDF expand failed")?;
-    
+
     let blinding = U2048::from_be_slice(&blinding_bytes);
     Ok(blinding.rem(&q_nz()))
 }
 
 pub fn encrypt_with_blinding_ct(message: &U2048, e_vec: &U2048, blinding: &U2048) -> U2048 {
-    // SOLUSI FINAL v0.5.5: Perkalian modular via DynResidue
-    let params = Option::from(DynResidueParams::new(&Q_2048)).expect("Q must be odd");
-    let msg_res = DynResidue::new(message, params);
-    let e_res = DynResidue::new(e_vec, params);
+    let params = FixedMontyParams::new(q_odd());
+    let msg_res = FixedMontyForm::new(message, &params);
+    let e_res = FixedMontyForm::new(e_vec, &params);
     let prod = msg_res.mul(&e_res).retrieve();
-    
+
     prod.add_mod(blinding, &q_nz())
 }
 
 pub fn decrypt_with_blinding_ct(ciphertext: &U2048, e_vec_inv: &U2048, blinding: &U2048) -> U2048 {
     let q_nonzero = q_nz();
     let unblinded = ciphertext.sub_mod(blinding, &q_nonzero);
-    
-    // SOLUSI FINAL v0.5.5: Perkalian modular via DynResidue
-    let params = Option::from(DynResidueParams::new(&Q_2048)).expect("Q must be odd");
-    let unblinded_res = DynResidue::new(&unblinded, params);
-    let inv_res = DynResidue::new(e_vec_inv, params);
+
+    let params = FixedMontyParams::new(q_odd());
+    let unblinded_res = FixedMontyForm::new(&unblinded, &params);
+    let inv_res = FixedMontyForm::new(e_vec_inv, &params);
     unblinded_res.mul(&inv_res).retrieve()
 }
 
@@ -130,7 +132,11 @@ pub fn decrypt_u2048(
     nonce: &[u8],
 ) -> Result<U2048, &'static str> {
     let blinding = derive_blinding(master_seed, nonce)?;
-    Ok(decrypt_with_blinding_ct(ciphertext, &key_pair.e_vec_inv, &blinding))
+    Ok(decrypt_with_blinding_ct(
+        ciphertext,
+        &key_pair.e_vec_inv,
+        &blinding,
+    ))
 }
 
 pub fn bytes_to_u2048(bytes: &[u8]) -> Result<U2048, &'static str> {
@@ -144,5 +150,5 @@ pub fn bytes_to_u2048(bytes: &[u8]) -> Result<U2048, &'static str> {
 }
 
 pub fn u2048_to_bytes(value: &U2048) -> [u8; 256] {
-    value.to_be_bytes()
+    value.to_be_bytes().into()
 }

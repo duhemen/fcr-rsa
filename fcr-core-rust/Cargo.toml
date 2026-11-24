@@ -1,6 +1,6 @@
 [package]
 name = "fcr-core-rust"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 
 [lib]
@@ -8,8 +8,8 @@ name = "fcr_core_rust"
 path = "src/lib.rs"
 
 [dependencies]
-# Core cryptography (v0.6.0 architecture)
-crypto-bigint = { version = "0.5", features = ["rand_core", "alloc"] }
+# Core cryptography (v0.6.1 architecture)
+crypto-bigint = "0.7.6"
 hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"

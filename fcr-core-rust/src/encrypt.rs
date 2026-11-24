@@ -1,9 +1,9 @@
-﻿//! Encryption module for FCR-RSA v0.6.0
+//! Encryption module for FCR-RSA v0.6.0
 
-use crypto_bigint::U2048;
 use crate::fib::{
     bytes_to_u2048, derive_blinding, encrypt_with_blinding_ct, u2048_to_bytes, FcrKeyPair,
 };
+use crypto_bigint::U2048;
 
 /// Enkripsi pesan (bytes) → ciphertext (U2048)
 pub fn encrypt_bytes(
@@ -14,7 +14,11 @@ pub fn encrypt_bytes(
 ) -> Result<U2048, &'static str> {
     let message = bytes_to_u2048(message_bytes)?;
     let blinding = derive_blinding(master_seed, nonce)?;
-    Ok(encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding))
+    Ok(encrypt_with_blinding_ct(
+        &message,
+        &key_pair.e_vec,
+        &blinding,
+    ))
 }
 
 /// API ini menyembunyikan U2048 sepenuhnya dari caller.
@@ -36,5 +40,9 @@ pub fn encrypt_u2048(
     nonce: &[u8],
 ) -> Result<U2048, &'static str> {
     let blinding = derive_blinding(master_seed, nonce)?;
-    Ok(encrypt_with_blinding_ct(message, &key_pair.e_vec, &blinding))
+    Ok(encrypt_with_blinding_ct(
+        message,
+        &key_pair.e_vec,
+        &blinding,
+    ))
 }

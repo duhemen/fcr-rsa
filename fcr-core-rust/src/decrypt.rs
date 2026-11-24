@@ -1,9 +1,7 @@
-﻿//! Decryption module for FCR-RSA v0.6.0
+//! Decryption module for FCR-RSA v0.6.0
 
+use crate::fib::{decrypt_u2048, u2048_to_bytes, FcrKeyPair};
 use crypto_bigint::U2048;
-use crate::fib::{
-    u2048_to_bytes, decrypt_u2048, FcrKeyPair,
-};
 
 /// Dekripsi ciphertext (U2048) → plaintext (bytes)
 pub fn decrypt_to_bytes(

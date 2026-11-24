@@ -29,16 +29,20 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-
 #[test]
 fn test_cross_language_vectors() {
     // 1. Baca file JSON yang di-generate oleh Python
-    let json_data = fs::read_to_string("tests/test_vectors.json")
-        .expect("❌ Gagal membaca test_vectors.json. Jalankan generate_test_vectors.py terlebih dahulu!");
+    let json_data = fs::read_to_string("tests/test_vectors.json").expect(
+        "❌ Gagal membaca test_vectors.json. Jalankan generate_test_vectors.py terlebih dahulu!",
+    );
 
-    let vectors: Vec<TestVector> = serde_json::from_str(&json_data).expect("❌ JSON parsing failed");
+    let vectors: Vec<TestVector> =
+        serde_json::from_str(&json_data).expect("❌ JSON parsing failed");
 
-    println!("🦀 Memverifikasi {} test vectors dari Python Oracle...", vectors.len());
+    println!(
+        "🦀 Memverifikasi {} test vectors dari Python Oracle...",
+        vectors.len()
+    );
 
     let mut passed = 0;
     let mut failed = 0;
@@ -59,26 +63,43 @@ fn test_cross_language_vectors() {
 
         if rust_ct_bytes.to_vec() == expected_ct_bytes {
             // Verifikasi tambahan Teorema 4 pada U2048 asli: decrypt(encrypt(M)) == M
-            let decrypted = decrypt_with_blinding_ct(&rust_ciphertext, &key_pair.e_vec_inv, &blinding);
+            let decrypted =
+                decrypt_with_blinding_ct(&rust_ciphertext, &key_pair.e_vec_inv, &blinding);
             assert_eq!(
                 decrypted, message,
                 "❌ Vector ID {}: Round-trip decrypt_with_blinding_ct gagal mengembalikan plaintext asli!",
                 vec.id
             );
 
-            println!("   ✅ Vector ID {}: MATCH (Encrypt & Decrypt Round-Trip Verified)", vec.id);
+            println!(
+                "   ✅ Vector ID {}: MATCH (Encrypt & Decrypt Round-Trip Verified)",
+                vec.id
+            );
             passed += 1;
         } else {
             println!("   ❌ Vector ID {}: MISMATCH!", vec.id);
-            println!("      Python expected: {}", &vec.expected_ciphertext_hex[..32]);
-            println!("      Rust produced  : {}", &bytes_to_hex(&rust_ct_bytes)[..32]);
+            println!(
+                "      Python expected: {}",
+                &vec.expected_ciphertext_hex[..32]
+            );
+            println!(
+                "      Rust produced  : {}",
+                &bytes_to_hex(&rust_ct_bytes)[..32]
+            );
             failed += 1;
         }
-
     }
 
-    println!("\n📊 HASIL JSON: {} passed, {} failed dari {} vectors", passed, failed, vectors.len());
-    assert_eq!(failed, 0, "Ada test vector yang tidak cocok antara Python dan Rust!");
+    println!(
+        "\n📊 HASIL JSON: {} passed, {} failed dari {} vectors",
+        passed,
+        failed,
+        vectors.len()
+    );
+    assert_eq!(
+        failed, 0,
+        "Ada test vector yang tidak cocok antara Python dan Rust!"
+    );
 }
 
 #[test]
@@ -91,7 +112,8 @@ fn test_lean4_formal_vectors() {
     };
 
     let csv_data = fs::read_to_string(csv_path)
-        .unwrap_or_else(|_| panic!("❌ Gagal membaca {}. Pastikan file CSV sudah disalin!", csv_path));
+        .expect("❌ Gagal membaca test_vectors.csv. Pastikan file CSV sudah disalin ke folder tests/!");
+
 
     let q: u128 = 1_000_000_007;
     let mut ct_count = 0;
@@ -108,7 +130,12 @@ fn test_lean4_formal_vectors() {
 
         match cols[0] {
             "ct" => {
-                assert_eq!(cols.len(), 5, "Format baris 'ct' salah pada baris {}", line_num + 1);
+                assert_eq!(
+                    cols.len(),
+                    5,
+                    "Format baris 'ct' salah pada baris {}",
+                    line_num + 1
+                );
                 let choice: u64 = cols[1].parse().unwrap();
                 let a: u64 = cols[2].parse().unwrap();
                 let b: u64 = cols[3].parse().unwrap();
@@ -117,9 +144,13 @@ fn test_lean4_formal_vectors() {
                 // Uji primitif constant-time Rust
                 let actual_res = ct_select_limb(choice, a, b);
                 assert_eq!(
-                    actual_res, expected_res,
+                    actual_res,
+                    expected_res,
                     "Mismatch ctSelectLimb pada baris {}: choice={}, a={}, b={}",
-                    line_num + 1, choice, a, b
+                    line_num + 1,
+                    choice,
+                    a,
+                    b
                 );
                 ct_count += 1;
             }
@@ -136,21 +167,48 @@ fn test_lean4_formal_vectors() {
 
                     let blinded = (m * e % q * b) % q;
                     let unblinded = (blinded * ((e_inv * b_inv) % q)) % q;
-                    assert_eq!(unblinded, expected_out, "Mismatch multiplicative blinding di baris {}", line_num + 1);
-                    assert_eq!(unblinded, m, "Round-trip blinding gagal kembali ke M di baris {}", line_num + 1);
+                    assert_eq!(
+                        unblinded,
+                        expected_out,
+                        "Mismatch multiplicative blinding di baris {}",
+                        line_num + 1
+                    );
+                    assert_eq!(
+                        unblinded,
+                        m,
+                        "Round-trip blinding gagal kembali ke M di baris {}",
+                        line_num + 1
+                    );
                 } else if cols.len() == 6 {
                     let expected_out: u128 = cols[5].parse().unwrap();
 
                     let blinded = ((m * e) % q + b) % q;
                     let unblinded = (((blinded + q - b) % q) * e_inv) % q;
-                    assert_eq!(unblinded, expected_out, "Mismatch additive blinding di baris {}", line_num + 1);
-                    assert_eq!(unblinded, m, "Round-trip blinding gagal kembali ke M di baris {}", line_num + 1);
+                    assert_eq!(
+                        unblinded,
+                        expected_out,
+                        "Mismatch additive blinding di baris {}",
+                        line_num + 1
+                    );
+                    assert_eq!(
+                        unblinded,
+                        m,
+                        "Round-trip blinding gagal kembali ke M di baris {}",
+                        line_num + 1
+                    );
                 } else {
-                    panic!("Format kolom 'blind' tidak dikenali pada baris {}", line_num + 1);
+                    panic!(
+                        "Format kolom 'blind' tidak dikenali pada baris {}",
+                        line_num + 1
+                    );
                 }
                 blind_count += 1;
             }
-            other => panic!("Jenis vektor tidak dikenal '{}' pada baris {}", other, line_num + 1),
+            other => panic!(
+                "Jenis vektor tidak dikenal '{}' pada baris {}",
+                other,
+                line_num + 1
+            ),
         }
     }
 
