@@ -24,4 +24,4 @@ jobs:
       - name: cargo audit
         run: cargo audit
       - name: cargo deny
-        run: cargo deny check
+        run: cargo deny check --config ../deny.toml

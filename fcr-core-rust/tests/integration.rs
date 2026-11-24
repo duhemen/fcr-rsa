@@ -126,8 +126,8 @@ fn test_encrypt_decrypt_random_data() {
     let key_pair = generate_key_pair(master_seed).unwrap();
 
     let mut session_seed = [0u8; 255];
-    for i in 0..255 {
-        session_seed[i] = (i * 7 + 13) as u8;
+    for (i, byte) in session_seed.iter_mut().enumerate() {
+        *byte = (i * 7 + 13) as u8;
     }
 
     let message = bytes_to_u2048(&session_seed).unwrap();
@@ -177,8 +177,8 @@ fn test_full_hybrid_kem_simulation() {
     let key_pair = generate_key_pair(master_seed).unwrap();
 
     let mut session_seed = [0u8; 255];
-    for i in 0..255 {
-        session_seed[i] = (i * 13 + 7) as u8;
+    for (i, byte) in session_seed.iter_mut().enumerate() {
+        *byte = (i * 13 + 7) as u8;
     }
 
     let nonce = [55u8; 12];

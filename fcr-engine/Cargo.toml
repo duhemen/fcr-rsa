@@ -15,7 +15,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Database
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "chrono", "tls-rustls"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # REST API
@@ -25,7 +25,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Kriptografi & Utilitas
-crypto-bigint = { version = "0.5", features = ["rand_core", "alloc"] }
+# Kriptografi & Utilitas (samakan dengan fcr-core-rust v0.7.11)
+crypto-bigint = { version = "0.7.11", features = ["rand_core", "alloc"] }
 hkdf = "0.12"
 sha2 = "0.10"
 chacha20poly1305 = "0.10"

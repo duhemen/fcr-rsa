@@ -111,9 +111,9 @@ fn test_lean4_formal_vectors() {
         "test/test_vectors.csv"
     };
 
-    let csv_data = fs::read_to_string(csv_path)
-        .expect("❌ Gagal membaca test_vectors.csv. Pastikan file CSV sudah disalin ke folder tests/!");
-
+    let csv_data = fs::read_to_string(csv_path).expect(
+        "❌ Gagal membaca test_vectors.csv. Pastikan file CSV sudah disalin ke folder tests/!",
+    );
 
     let q: u128 = 1_000_000_007;
     let mut ct_count = 0;

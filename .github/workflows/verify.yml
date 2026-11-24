@@ -8,26 +8,33 @@ on:
 
 jobs:
   # ============================================================
-  # 1. Formal Verification (Lean 4)
+  # 1. Formal Verification (Lean 4 v4.36.0)
   # ============================================================
   formal-verification:
     name: Lean 4 Theorem Proving
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install elan (Lean toolchain manager)
         run: |
-          curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.36.0
+          curl https://lean-lang.org -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.36.0
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
-      - name: Build Formal Proofs with Lake
+      - name: Build Formal Proofs & Generate Vectors
         working-directory: formal-verification
         run: |
-          echo "🔍 Mengunduh dependensi std4 dan memverifikasi teorema..."
-          lake update
+          echo "🔍 Memverifikasi teorema Lean 4..."
+          rm -rf .lake lake-manifest.json
           lake build
-          echo "✅ Lean 4 proofs verified successfully!"
+          lean --run DumpVectors.lean > ../fcr-core-rust/tests/test_vectors.csv
+          echo "✅ Lean 4 proofs & 2,560 test vectors verified!"
+
+      - name: Upload Lean 4 Test Vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean4-test-vectors
+          path: fcr-core-rust/tests/test_vectors.csv
 
   # ============================================================
   # 2. Rust Differential Equivalence Test
@@ -39,17 +46,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run Blinding Equivalence Test
+
+      - name: Download Lean 4 Test Vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: lean4-test-vectors
+          path: fcr-core-rust/tests
+
+      - name: Run Cross-Language Equivalence Test
+        working-directory: fcr-core-rust
         run: |
-          echo "🧪 Menjalankan 1000 vektor uji Lean ↔ Rust..."
-          cd fcr-core-rust
-          cargo test --test blinding_equivalence -- --nocapture
+          echo "🧪 Menjalankan 2.560 vektor uji Lean 4 + 10 vektor Python Oracle..."
+          cargo test --test cross_language_test -- --nocapture
           echo "✅ Rust Equivalence Test Passed"
 
   # ============================================================
   # 3. Brutal Test Suite (45 Assertions)
   # ============================================================
-    brutal-suite:
+  brutal-suite:
     name: Brutal Test Suite (45 Assertions)
     runs-on: ubuntu-latest
     needs: rust-equivalence
@@ -87,11 +101,9 @@ jobs:
           echo "✅ Python venv ready"
 
       - name: Build Engine Release Binary
-        run: |
-          cd fcr-engine
-          cargo build --release
+        working-directory: fcr-engine
+        run: cargo build --release
 
-      # ✅ LANGKAH BARU: Jalankan Migrasi Database
       - name: Run Database Migrations
         env:
           DATABASE_URL: "postgresql://postgres:Bp2jk%40kalteng123@localhost:5432/fcr_rsa"
@@ -105,13 +117,11 @@ jobs:
           DATABASE_URL: "postgresql://postgres:Bp2jk%40kalteng123@localhost:5432/fcr_rsa"
         run: |
           source .venv/bin/activate
-          
           echo "🚀 Memulai FCR-Engine Server..."
           cd fcr-engine
-          
           DATABASE_URL=$DATABASE_URL ./target/release/fcr-engine serve &
           SERVER_PID=$!
-          
+
           echo "⏳ Menunggu server siap..."
           for i in {1..30}; do
             if curl -s http://localhost:8080/health > /dev/null; then
@@ -120,13 +130,12 @@ jobs:
             fi
             sleep 1
           done
-          
+
           echo "🔥 Menjalankan Brutal Test Suite (45 Assertions)..."
           DATABASE_URL=$DATABASE_URL python test_brutal_suite.py
           TEST_EXIT=$?
-          
           kill $SERVER_PID || true
-          
+
           if [ $TEST_EXIT -ne 0 ]; then
             echo "❌ Brutal Test Suite GAGAL"
             exit 1
