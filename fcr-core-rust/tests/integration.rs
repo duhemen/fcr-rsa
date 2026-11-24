@@ -1,18 +1,11 @@
 //! FCR-RSA v0.6.0 Integration Tests
 //! Test suite komprehensif untuk Q 2048-bit
 
-use crypto_bigint::{U2048, Zero};
 use crypto_bigint::modular::runtime_mod::{DynResidue, DynResidueParams};
+use crypto_bigint::{Zero, U2048};
 use fcr_core_rust::{
-    generate_key_pair,
-    derive_blinding,
-    encrypt_with_blinding_ct,
-    decrypt_with_blinding_ct,
-    bytes_to_u2048,
-    u2048_to_bytes,
-    max_seed_bytes,
-    fibonacci_nonlinear_with_lwe,
-    gaussian_map,
+    bytes_to_u2048, decrypt_with_blinding_ct, derive_blinding, encrypt_with_blinding_ct,
+    fibonacci_nonlinear_with_lwe, gaussian_map, generate_key_pair, max_seed_bytes, u2048_to_bytes,
     Q_2048,
 };
 
@@ -62,10 +55,10 @@ fn test_u2048_to_bytes_roundtrip() {
 fn test_generate_key_pair() {
     let master_seed = b"test master seed for key generation";
     let key_pair = generate_key_pair(master_seed).unwrap();
-    
+
     assert!(!bool::from(key_pair.e_vec.is_zero()));
     assert!(!bool::from(key_pair.e_vec_inv.is_zero()));
-    
+
     // VERIFIKASI: E_vec * E_vec_inv ≡ 1 (mod Q)
     // PERBAIKAN: Gunakan DynResidue (konsisten dengan fib.rs)
     let is_valid = verify_mul_mod(&key_pair.e_vec, &key_pair.e_vec_inv, &U2048::ONE);
@@ -77,7 +70,7 @@ fn test_generate_key_pair_deterministic() {
     let master_seed = b"deterministic test";
     let key_pair1 = generate_key_pair(master_seed).unwrap();
     let key_pair2 = generate_key_pair(master_seed).unwrap();
-    
+
     assert_eq!(key_pair1.e_vec, key_pair2.e_vec);
     assert_eq!(key_pair1.e_vec_inv, key_pair2.e_vec_inv);
 }
@@ -113,16 +106,16 @@ fn test_derive_blinding_different_nonce() {
 fn test_encrypt_decrypt_roundtrip() {
     let master_seed = b"test master seed";
     let key_pair = generate_key_pair(master_seed).unwrap();
-    
+
     let session_seed = [42u8; 255];
     let message = bytes_to_u2048(&session_seed).unwrap();
-    
+
     let nonce = [99u8; 12];
     let blinding = derive_blinding(master_seed, &nonce).unwrap();
-    
+
     let encrypted = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding);
     let decrypted = decrypt_with_blinding_ct(&encrypted, &key_pair.e_vec_inv, &blinding);
-    
+
     assert_eq!(message, decrypted);
 }
 
@@ -130,19 +123,19 @@ fn test_encrypt_decrypt_roundtrip() {
 fn test_encrypt_decrypt_random_data() {
     let master_seed = b"random test";
     let key_pair = generate_key_pair(master_seed).unwrap();
-    
+
     let mut session_seed = [0u8; 255];
     for i in 0..255 {
         session_seed[i] = (i * 7 + 13) as u8;
     }
-    
+
     let message = bytes_to_u2048(&session_seed).unwrap();
     let nonce = [77u8; 12];
     let blinding = derive_blinding(master_seed, &nonce).unwrap();
-    
+
     let encrypted = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding);
     let decrypted = decrypt_with_blinding_ct(&encrypted, &key_pair.e_vec_inv, &blinding);
-    
+
     assert_eq!(message, decrypted);
 }
 
@@ -151,15 +144,15 @@ fn test_encrypt_produces_different_ciphertext() {
     let master_seed = b"ind-cpa test";
     let key_pair = generate_key_pair(master_seed).unwrap();
     let message = bytes_to_u2048(&[1u8; 100]).unwrap();
-    
+
     let nonce1 = [1u8; 12];
     let blinding1 = derive_blinding(master_seed, &nonce1).unwrap();
     let encrypted1 = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding1);
-    
+
     let nonce2 = [2u8; 12];
     let blinding2 = derive_blinding(master_seed, &nonce2).unwrap();
     let encrypted2 = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding2);
-    
+
     assert_ne!(encrypted1, encrypted2);
 }
 
@@ -181,26 +174,22 @@ fn test_gaussian_map() {
 fn test_full_hybrid_kem_simulation() {
     let master_seed = b"full simulation test";
     let key_pair = generate_key_pair(master_seed).unwrap();
-    
+
     let mut session_seed = [0u8; 255];
     for i in 0..255 {
         session_seed[i] = (i * 13 + 7) as u8;
     }
-    
+
     let nonce = [55u8; 12];
     let blinding = derive_blinding(master_seed, &nonce).unwrap();
-    
+
     let message = bytes_to_u2048(&session_seed).unwrap();
     let encrypted_seed = encrypt_with_blinding_ct(&message, &key_pair.e_vec, &blinding);
-    
-    let decrypted_seed = decrypt_with_blinding_ct(
-        &encrypted_seed,
-        &key_pair.e_vec_inv,
-        &blinding,
-    );
-    
+
+    let decrypted_seed = decrypt_with_blinding_ct(&encrypted_seed, &key_pair.e_vec_inv, &blinding);
+
     assert_eq!(message, decrypted_seed);
-    
+
     let decrypted_bytes = u2048_to_bytes(&decrypted_seed);
     assert_eq!(&decrypted_bytes[1..256], &session_seed[..]);
 }
