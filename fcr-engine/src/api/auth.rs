@@ -1,4 +1,4 @@
-//! Middleware autentikasi API key (Bearer token) + Auto-Mune Check (Hardened).
+//! Middleware autentikasi API key (Bearer token) + Auto-Mune Check (Hardened v0.6.1).
 use axum::{
     extract::{Request, State},
     http::{header, HeaderMap, StatusCode},
@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use crate::api::auto_immune::SpatiotemporalToken;
 use crate::api::AppState;
@@ -62,7 +62,7 @@ pub async fn require_api_key(
         }
     };
 
-    // 3. WAJIBKAN HEADER SPATIOTEMPORAL + VALIDASI HMAC-SHA256
+    // 3. WAJIBKAN HEADER SPATIOTEMPORAL + VALIDASI HMAC-SHA256 + BOUNDS CHECK
     let token = match extract_and_verify_spatiotemporal(request.headers(), &plaintext_key) {
         Ok(t) => t,
         Err((is_security_violation, err_msg)) => {
@@ -87,7 +87,7 @@ pub async fn require_api_key(
 
     let _ = db::update_last_state(&state.pool, record.id, &anomaly.current_loc_hash, token.timestamp).await;
 
-    // Risk Score >= 70 → Cooldown + SUNTIKKAN HoneypotContext (bukan short-circuit!)
+    // Risk Score >= 70 → Cooldown + SUNTIKKAN HoneypotContext
     if anomaly.risk_score >= 70 {
         let reason = anomaly.reason.clone().unwrap_or_else(|| "high risk score".into());
         let trace_id = format!("TRC-{}", chrono::Utc::now().timestamp_millis());
@@ -108,7 +108,7 @@ pub async fn require_api_key(
             eprintln!("❌ [DB ERROR] Gagal apply cooldown: {}", e);
         }
 
-        // 3. 🚨 ACTIVE AUTOMATED INCIDENT REPORT (Laporan Otomatis Aktif)
+        // 3. ACTIVE AUTOMATED INCIDENT REPORT
         eprintln!("\n============================================================");
         eprintln!("🚨 [SECURITY INCIDENT REPORT] AUTO-GENERATED 🚨");
         eprintln!("============================================================");
@@ -138,18 +138,18 @@ pub async fn require_api_key(
         db::touch_api_key(&pool, id).await;
     });
 
-    // 6. Inject AuthInfo (DIPERBARUI)
+    // 6. Inject AuthInfo
     request.extensions_mut().insert(AuthInfo {
         user_name: record.user_name,
         key_prefix: record.key_prefix,
-        risk_score: anomaly.risk_score,       // ✅ OPER SKOR DARI ANOMALI
-        risk_reason: risk_reason,  // ✅ OPER ALASAN DARI ANOMALI
+        risk_score: anomaly.risk_score,
+        risk_reason,
     });
     Ok(next.run(request).await)
 }
 
 // ============================================================
-// Helper: Extract Spatiotemporal
+// Helper: Extract & Validate Spatiotemporal (Hardened G1, G3, G4)
 // ============================================================
 fn extract_and_verify_spatiotemporal(
     headers: &HeaderMap,
@@ -182,16 +182,36 @@ fn extract_and_verify_spatiotemporal(
 
     let lat: f64 = lat_str.parse().map_err(|_| (false, "X-FCR-GPS-Lat must be a float"))?;
     let lon: f64 = lon_str.parse().map_err(|_| (false, "X-FCR-GPS-Lon must be a float"))?;
+
+    // G3: Validasi batas koordinat geografis bumi
+    if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) {
+        return Err((false, "X-FCR-GPS-Lat out of valid range [-90.0, 90.0]"));
+    }
+    if !lon.is_finite() || !(-180.0..=180.0).contains(&lon) {
+        return Err((false, "X-FCR-GPS-Lon out of valid range [-180.0, 180.0]"));
+    }
+
     let ts = DateTime::parse_from_rfc3339(ts_str)
         .map_err(|_| (false, "X-FCR-Timestamp must be RFC3339 format"))?
         .with_timezone(&Utc);
+
+    // G1: Tolak timestamp masa depan (toleransi clock skew maks +300 detik)
+    if ts > Utc::now() + Duration::seconds(300) {
+        return Err((true, "X-FCR-Timestamp is in the future (clock skew / injection rejected)"));
+    }
+
     let latency: f64 = latency_str.parse().map_err(|_| (false, "X-FCR-Latency must be a float"))?;
+
+    // G4: Latensi wajib >= 0 dan finite
+    if !latency.is_finite() || latency < 0.0 {
+        return Err((false, "X-FCR-Latency must be a non-negative finite number"));
+    }
 
     Ok(SpatiotemporalToken { gps_lat: lat, gps_lon: lon, timestamp: ts, latency_ms: latency })
 }
 
 // ============================================================
-// Error helpers (module level — brace sudah seimbang)
+// Error helpers
 // ============================================================
 fn bad_request(msg: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad_request", "message": msg }))).into_response()

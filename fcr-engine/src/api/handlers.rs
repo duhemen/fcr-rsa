@@ -1,4 +1,4 @@
-//! Handler REST API: /keygen, /encrypt, /decrypt.
+//! Handler REST API: /keygen, /encrypt, /decrypt (Hardened v0.6.1).
 use axum::{
     extract::{Extension, State},
     http::StatusCode,
@@ -13,6 +13,15 @@ use crate::api::AppState;
 use crate::api::auth::{AuthInfo, HoneypotContext};
 use crate::crypto::{decrypt_text, encrypt_text};
 use crate::db;
+
+// Helper validasi tier ketat (G6)
+fn validate_tier(tier: &str) -> Result<String, Response> {
+    let clean = tier.trim().to_lowercase();
+    match clean.as_str() {
+        "a" | "b" => Ok(clean),
+        _ => Err(bad_request("invalid tier: must be 'a' or 'b'")),
+    }
+}
 
 // ============================================================
 // /keygen
@@ -46,6 +55,10 @@ pub async fn keygen(
     Extension(auth): Extension<AuthInfo>,
     Json(req): Json<KeygenRequest>,
 ) -> Response {
+    let tier = match validate_tier(&req.tier) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
     if req.n < 4 { return bad_request("n must be >= 4"); }
     if req.name.trim().is_empty() { return bad_request("name tidak boleh kosong"); }
 
@@ -61,9 +74,9 @@ pub async fn keygen(
     });
     let pk_b64 = B64.encode(pk_json.to_string().as_bytes());
     
-    println!("[keygen] user={} key_prefix={} created key '{}' (tier {})", auth.user_name, auth.key_prefix, req.name, req.tier);
+    println!("[keygen] user={} key_prefix={} created key '{}' (tier {})", auth.user_name, auth.key_prefix, req.name, tier);
     
-    (StatusCode::CREATED, Json(KeygenResponse { name: req.name, tier: req.tier, public_key_b64: pk_b64 })).into_response()
+    (StatusCode::CREATED, Json(KeygenResponse { name: req.name, tier, public_key_b64: pk_b64 })).into_response()
 }
 
 fn simple_hash(s: &str) -> u64 {
@@ -95,10 +108,13 @@ pub struct EncryptResponse {
 pub async fn encrypt(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthInfo>,
-    // ✅ SOLUSI AXUM 0.7: Gunakan Option<Extension<T>>. Tidak konflik dengan Json!
     honeypot_opt: Option<Extension<HoneypotContext>>,
     Json(req): Json<EncryptRequest>,
 ) -> Response {
+    let tier = match validate_tier(&req.tier) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
     let is_honeypot = honeypot_opt.is_some();
 
     let text_bytes = match B64.decode(&req.text_b64) {
@@ -111,7 +127,7 @@ pub async fn encrypt(
         Err(_) => return bad_request("text_b64 bukan UTF-8 valid"),
     };
 
-    // 🚨 POISONED PILL LOGIC
+    // POISONED PILL LOGIC
     if let Some(Extension(ctx)) = honeypot_opt {
         let tracking_payload = json!({
             "status": "HONEYPOT_TRIGGERED",
@@ -135,7 +151,7 @@ pub async fn encrypt(
         }
     };
 
-    let ct = match encrypt_text(&text, &key, &req.tier, req.blinding.as_deref()) {
+    let ct = match encrypt_text(&text, &key, &tier, req.blinding.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[encrypt] crypto error: {}", e);
@@ -143,23 +159,19 @@ pub async fn encrypt(
         }
     };
 
-    // ✅ PERBARUI LOG: Tambahkan info risk_score agar console log lebih informatif
     println!(
         "[encrypt] user={} key_prefix={} key='{}' blocks={} tier={} honeypot={} risk={} ({:?})",
         auth.user_name, 
         auth.key_prefix, 
         req.key_name, 
         text.len(), 
-        req.tier, 
+        tier, 
         is_honeypot,
-        auth.risk_score,       // <-- TAMBAHKAN INI
-        auth.risk_reason       // <-- TAMBAHKAN INI (menggunakan {:?} karena bertipe Option<String>)
+        auth.risk_score,
+        auth.risk_reason
     );
 
-    // ✅ OBSERVABILITY GAP FIX: Buat HeaderMap kustom
     let mut headers = axum::http::HeaderMap::new();
-    
-    // Jika skor di rentang mencurigakan (40-69), tambahkan header peringatan
     if auth.risk_score >= 40 && auth.risk_score < 70 {
         headers.insert(
             "X-FCR-Risk-Indicator", 
@@ -167,7 +179,6 @@ pub async fn encrypt(
         );
     }
 
-    // ✅ Return Tuple (Headers, Json) - Idiomatic Axum 0.7
     let response_body = Json(EncryptResponse {
         ciphertext_b64: B64.encode(ct.as_bytes()),
         blocks: text.len(),
@@ -198,6 +209,11 @@ pub async fn decrypt(
     Extension(auth): Extension<AuthInfo>,
     Json(req): Json<DecryptRequest>,
 ) -> Response {
+    let tier = match validate_tier(&req.tier) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+
     let ct_bytes = match B64.decode(&req.ciphertext_b64) {
         Ok(b) => b,
         Err(_) => return bad_request("ciphertext_b64 bukan base64 valid"),
@@ -216,7 +232,7 @@ pub async fn decrypt(
         }
     };
 
-    let pt = match decrypt_text(&ct_str, &key, &req.tier, req.blinding.as_deref()) {
+    let pt = match decrypt_text(&ct_str, &key, &tier, req.blinding.as_deref()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("[decrypt] crypto error: {}", e);
@@ -224,7 +240,7 @@ pub async fn decrypt(
         }
     };
 
-    println!("[decrypt] user={} key_prefix={} key='{}' tier={}", auth.user_name, auth.key_prefix, req.key_name, req.tier);
+    println!("[decrypt] user={} key_prefix={} key='{}' tier={}", auth.user_name, auth.key_prefix, req.key_name, tier);
     
     Json(DecryptResponse { text_b64: B64.encode(pt.as_bytes()) }).into_response()
 }

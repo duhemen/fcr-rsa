@@ -21,6 +21,23 @@ fn q_nz() -> NonZero<U2048> {
     NonZero::new(Q_2048).unwrap()
 }
 
+/// Masking constant-time: mengubah bit kontrol (0 atau 1) menjadi mask 0x0 atau 0xFFFFFFFFFFFFFFFF.
+/// Memakai `wrapping_sub` dan `core::hint::black_box` agar kompiler tidak mengubahnya menjadi percabangan (branch).
+#[inline(always)]
+pub fn ct_mask(choice: u64) -> u64 {
+    let bit = core::hint::black_box(choice & 1);
+    0u64.wrapping_sub(bit)
+}
+
+/// Pemilihan constant-time per-limb tanpa percabangan (branchless).
+/// Identik secara matematis dengan definisi `ctSelectLimb` di Lean 4 (`FcrConstantTime.lean`).
+#[inline(always)]
+pub fn ct_select_limb(choice: u64, a: u64, b: u64) -> u64 {
+    let mask = ct_mask(choice);
+    b ^ (mask & (a ^ b))
+}
+
+
 pub struct FcrKeyPair {
     pub e_vec: U2048,
     pub e_vec_inv: U2048,

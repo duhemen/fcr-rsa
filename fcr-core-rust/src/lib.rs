@@ -8,6 +8,7 @@ pub use fib::{
     generate_key_pair, derive_blinding, encrypt_with_blinding_ct,
     decrypt_with_blinding_ct, decrypt_u2048, FcrKeyPair, Q_2048, max_seed_bytes,
     bytes_to_u2048, u2048_to_bytes, fibonacci_nonlinear_with_lwe, gaussian_map,
+    ct_mask, ct_select_limb, // <--- Tambahkan ini
 };
 
 pub use encrypt::{encrypt_bytes, encrypt_u2048, encrypt_to_bytes};

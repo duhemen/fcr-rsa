@@ -1,5 +1,5 @@
-//! FCR Engine - Hybrid KEM + AEAD (v0.6.0 FINAL & TEST-READY)
-//! Integrasi dengan fcr-core-rust v0.6.0 (U2048 + Constant-Time)
+//! FCR Engine - Hybrid KEM + AEAD (v0.6.1 HARDENED)
+//! Integrasi dengan fcr-core-rust v0.6.0 (U2048 + Constant-Time + Tier Isolation)
 
 use fcr_core_rust::fib::{
     generate_key_pair,
@@ -18,29 +18,43 @@ use base64::{Engine as _, engine::general_purpose};
 use rand::RngCore;
 
 // ============================================================
+// 0. Domain Separation Helper (Tier A vs Tier B Isolation)
+// ============================================================
+
+fn build_hkdf_info(tier: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let clean_tier = tier.trim().to_lowercase();
+    match clean_tier.as_str() {
+        "a" | "b" => Ok(format!("fcr-rsa-session-key-v1:tier-{}", clean_tier).into_bytes()),
+        _ => Err("Invalid tier: must be 'a' or 'b'".into()),
+    }
+}
+
+// ============================================================
 // 1. Wrapper Kompatibilitas
 // ============================================================
 
 pub fn encrypt_text(
     text: &str,
     key: &KeyRecord,
-    _tier: &str,
+    tier: &str,
     blinding_override: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let hkdf_info = build_hkdf_info(tier)?;
     let seed_bytes = key.seed.as_bytes();
     let key_pair = generate_key_pair(seed_bytes)?;
-    encrypt_hybrid_kem(text, &key_pair, seed_bytes, blinding_override)
+    encrypt_hybrid_kem(text, &key_pair, seed_bytes, blinding_override, &hkdf_info)
 }
 
 pub fn decrypt_text(
     ciphertext: &str,
     key: &KeyRecord,
-    _tier: &str,
+    tier: &str,
     _blinding: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let hkdf_info = build_hkdf_info(tier)?;
     let seed_bytes = key.seed.as_bytes();
     let key_pair = generate_key_pair(seed_bytes)?;
-    decrypt_hybrid_kem(ciphertext, &key_pair, seed_bytes)
+    decrypt_hybrid_kem(ciphertext, &key_pair, seed_bytes, &hkdf_info)
 }
 
 pub fn hash_api_key(plaintext_key: &str) -> String {
@@ -61,7 +75,7 @@ pub fn generate_api_key() -> (String, String, String) {
 }
 
 // ============================================================
-// 2. Hybrid KEM + AEAD Core (FIXED: Full Determinism for Test Vectors)
+// 2. Hybrid KEM + AEAD Core (Full Determinism + Tier Bound)
 // ============================================================
 
 pub fn encrypt_hybrid_kem(
@@ -69,8 +83,8 @@ pub fn encrypt_hybrid_kem(
     key_pair: &FcrKeyPair,
     master_seed: &[u8],
     blinding_override: Option<&str>,
+    hkdf_info: &[u8],
 ) -> Result<String, Box<dyn std::error::Error>> {
-    
     // 1. Session seed: Deterministik jika ada override, Acak jika tidak
     let mut session_seed_bytes = [0u8; 32];
     if let Some(override_str) = blinding_override {
@@ -101,10 +115,10 @@ pub fn encrypt_hybrid_kem(
     // 5. Enkripsi seed dengan FCR-RSA (Constant-Time)
     let encrypted_seed = encrypt_with_blinding_ct(&seed_bigint, &key_pair.e_vec, &blinding);
 
-    // 6. Turunkan kunci sesi 256-bit dari session seed menggunakan HKDF
+    // 6. Turunkan kunci sesi 256-bit dari session seed + TIER CONTEXT menggunakan HKDF
     let hk = Hkdf::<Sha256>::new(None, &session_seed_bytes);
     let mut session_key_bytes = [0u8; 32];
-    hk.expand(b"fcr-rsa-session-key-v1", &mut session_key_bytes).map_err(|e| e.to_string())?;
+    hk.expand(hkdf_info, &mut session_key_bytes).map_err(|e| e.to_string())?;
 
     // 7. AEAD Nonce: Deterministik jika ada override, Acak jika tidak
     let mut aead_nonce = [0u8; 12];
@@ -134,6 +148,7 @@ pub fn decrypt_hybrid_kem(
     encrypted_data: &str,
     key_pair: &FcrKeyPair,
     master_seed: &[u8],
+    hkdf_info: &[u8],
 ) -> Result<String, Box<dyn std::error::Error>> {
     // 1. Parse format 4 BAGIAN
     let parts: Vec<&str> = encrypted_data.split(':').collect();
@@ -156,7 +171,7 @@ pub fn decrypt_hybrid_kem(
     // 5. Dekripsi seed dengan FCR-RSA (Constant-Time)
     let session_seed_bigint = decrypt_with_blinding_ct(&encrypted_seed, &key_pair.e_vec_inv, &blinding);
     
-    // 6. FIX KRITIS: Konversi U2048 ke byte dan POTONG menjadi 32 byte asli!
+    // 6. Konversi U2048 ke byte dan POTONG menjadi 32 byte asli
     let full_bytes = u2048_to_bytes(&session_seed_bigint);
     let session_seed_bytes = if full_bytes.len() > 32 {
         &full_bytes[full_bytes.len() - 32..]
@@ -164,10 +179,10 @@ pub fn decrypt_hybrid_kem(
         &full_bytes
     };
 
-    // 7. Turunkan kunci sesi 256-bit dari session seed (sekarang panjangnya 32 byte, cocok!)
+    // 7. Turunkan kunci sesi 256-bit dengan TIER CONTEXT yang wajib cocok
     let hk = Hkdf::<Sha256>::new(None, session_seed_bytes);
     let mut session_key_bytes = [0u8; 32];
-    hk.expand(b"fcr-rsa-session-key-v1", &mut session_key_bytes).map_err(|e| e.to_string())?;
+    hk.expand(hkdf_info, &mut session_key_bytes).map_err(|e| e.to_string())?;
 
     // 8. Dekripsi data dengan ChaCha20-Poly1305
     let cipher = ChaCha20Poly1305::new_from_slice(&session_key_bytes).map_err(|e| e.to_string())?;

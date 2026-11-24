@@ -260,10 +260,11 @@ r = enc(k, lat=NY_LAT, lon=NY_LON, ts=now_ts(3))  # grid NY, dt=3
 t("C4 Impossible zone jump → honeypot", is_honeypot(r), f"blocks={r.json().get('blocks')}")
 
 # C5 Rapid transition 120s → +30 → TIDAK honeypot
-k,_,_ = make_api_key("C5")
-enc(k, ts=now_ts(0))
-r = enc(k, lat=NY_LAT, lon=NY_LON, ts=now_ts(120))
-t("C5 Rapid transition 120s → normal", r.status_code==200 and not is_honeypot(r))
+# C5 Rapid transition 120s → +30 → TIDAK honeypot
+k, _, _ = make_api_key("C5")
+enc(k, ts=now_ts(-120))  # Set state 120 detik lalu (bukan masa depan!)
+r = enc(k, lat=NY_LAT, lon=NY_LON, ts=now_ts(0))
+t("C5 Rapid transition 120s → normal", r.status_code == 200 and not is_honeypot(r))
 
 # C6 First request → +5 → normal
 k,_,_ = make_api_key("C6")
@@ -306,7 +307,7 @@ r2 = enc(k, ts=now_ts(100))  # koordinat normal, tapi key masih cooldown
 t("D6 Cooldown active → 401", r2.status_code==401, f"got={r2.status_code}")
 # D7 Setelah reset cooldown → bisa 200 lagi
 reset_cooldown(kh)
-r3 = enc(k, ts=now_ts(200))
+r3 = enc(k, ts=now_ts(0))
 t("D7 After cooldown reset → 200", r3.status_code==200, f"got={r3.status_code}")
 
 # ============================================================
@@ -340,123 +341,240 @@ t("E5b After revoke → 401", enc(k).status_code==401)
 #   F. STRESS & CONCURRENCY TESTING (Asyncio + aiohttp)
 # ==============================================================
 import asyncio
-import aiohttp
 import time
+import aiohttp
 
-def get_stress_headers(api_key_plaintext, lat="-6.200000", lon="106.816666", latency="50.0"):
-    """Helper untuk generate header HMAC yang valid (SAMA PERSIS dengan logika headers_for)"""
-    ts = now_ts()
-    payload = f"{lat}:{lon}:{ts}:{latency}"
-    sig = hmac.new(api_key_plaintext.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return {
-        "Authorization": f"Bearer {api_key_plaintext}",
-        "X-FCR-GPS-Lat": lat,
-        "X-FCR-GPS-Lon": lon,
-        "X-FCR-Timestamp": ts,
-        "X-FCR-Latency": latency,
-        "X-FCR-Signature": sig,
-        "Content-Type": "application/json"
-    }
+
+def get_stress_headers(
+    api_key_plaintext, lat="-6.200000", lon="106.816666", latency="50.0"
+):
+  ts = now_ts()
+  payload = f"{lat}:{lon}:{ts}:{latency}"
+  sig = hmac.new(
+      api_key_plaintext.encode(), payload.encode(), hashlib.sha256
+  ).hexdigest()
+  return {
+      "Authorization": f"Bearer {api_key_plaintext}",
+      "X-FCR-GPS-Lat": lat,
+      "X-FCR-GPS-Lon": lon,
+      "X-FCR-Timestamp": ts,
+      "X-FCR-Latency": latency,
+      "X-FCR-Signature": sig,
+      "Content-Type": "application/json",
+  }
+
 
 async def stress_worker(session, url, endpoint, headers, payload):
-    """Worker async untuk menembakkan request ke server"""
-    try:
-        async with session.post(f"{url}/{endpoint}", json=payload, headers=headers) as resp:
-            return resp.status
-    except Exception:
-        return 0  # Connection dropped or timeout
+  try:
+    async with session.post(
+        f"{url}/{endpoint}", json=payload, headers=headers
+    ) as resp:
+      return resp.status
+  except Exception:
+    return 0
+
 
 def run_stress_tests():
-    print("\n==============================================================")
-    print("  F. STRESS & CONCURRENCY TESTING (500+ Concurrent Requests)")
-    print("==============================================================")
-    
-    # 1. Setup: Buat 1 key khusus untuk stress test
-    api_key_plaintext, key_hash, kid = make_api_key("F_STRESS")
-    base_url = "http://127.0.0.1:8080"
-    
-    # 2. Prepare payload untuk encrypt (MENGGUNAKAN 'text_b64')
-    plaintext = "Stress test payload for FCR-RSA v0.6.0 concurrent execution"
-    enc_payload = {
-        "key_name": KEY_NAME,
-        "text_b64": base64.b64encode(plaintext.encode()).decode(),
-        "tier": "b"
-    }
-    
-    # 3. Prerequisite: Lakukan 1x encrypt sinkron untuk mendapatkan ciphertext valid
-    r = requests.post(f"{base_url}/encrypt", json=enc_payload, headers=get_stress_headers(api_key_plaintext))
-    if r.status_code != 200:
-        t("F0 Prerequisite encrypt", False, f"Failed with {r.status_code}")
-        return
-    
-    ct_data = r.json()
-    dec_payload = {
-        "key_name": KEY_NAME, 
-        "ciphertext_b64": ct_data["ciphertext_b64"],
-        "tier": "b"
-    }
+  section("F. STRESS & CONCURRENCY TESTING (500+ Multi-Key Concurrent)")
 
-    async def execute_stress():
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            
-            # F1: 500 Concurrent Encrypts
-            start = time.time()
-            tasks = [stress_worker(session, base_url, "encrypt", get_stress_headers(api_key_plaintext), enc_payload) for _ in range(500)]
-            results_enc = await asyncio.gather(*tasks)
-            time_enc = time.time() - start
-            success_enc = sum(1 for r in results_enc if r == 200)
-            # PANGGIL t() DI SINI AGAR MASUK KE RESULTS GLOBAL
-            t("F1 500x Concurrent Encrypt", success_enc == 500, f"{success_enc}/500 success ({time_enc:.2f}s)")
+  # Buat pool 25 API key agar tidak memicu false-positive rate limit 1-key saat stress test
+  key_pool = [make_api_key(f"F_STRESS_{i}")[0] for i in range(25)]
+  base_url = API_URL
 
-            # F2: 500 Concurrent Decrypts
-            start = time.time()
-            tasks = [stress_worker(session, base_url, "decrypt", get_stress_headers(api_key_plaintext), dec_payload) for _ in range(500)]
-            results_dec = await asyncio.gather(*tasks)
-            time_dec = time.time() - start
-            success_dec = sum(1 for r in results_dec if r == 200)
-            # PANGGIL t() DI SINI
-            t("F2 500x Concurrent Decrypt", success_dec == 500, f"{success_dec}/500 success ({time_dec:.2f}s)")
+  plaintext = "Stress test payload for FCR-RSA v0.6.0 concurrent execution"
+  enc_payload = {
+      "key_name": KEY_NAME,
+      "text_b64": base64.b64encode(plaintext.encode()).decode(),
+      "tier": "b",
+  }
 
-            # F3: 200 Concurrent Invalid Auth
-            start = time.time()
-            bad_headers = get_stress_headers("INVALID_KEY_STRESS")
-            tasks = [stress_worker(session, base_url, "encrypt", bad_headers, enc_payload) for _ in range(200)]
-            results_bad = await asyncio.gather(*tasks)
-            time_bad = time.time() - start
-            auth_reject = sum(1 for r in results_bad if r == 401)
-            server_error = sum(1 for r in results_bad if r >= 500)
-            # PANGGIL t() DI SINI
-            t("F3 200x Concurrent Invalid Auth", auth_reject == 200 and server_error == 0, f"{auth_reject}/200 rejected (401), {server_error} server errors ({time_bad:.2f}s)")
+  r = requests.post(
+      f"{base_url}/encrypt",
+      json=enc_payload,
+      headers=get_stress_headers(key_pool[0]),
+  )
+  if r.status_code != 200:
+    t("F0 Prerequisite encrypt", False, f"Failed with {r.status_code}")
+    return
 
-    # Jalankan event loop
-    asyncio.run(execute_stress())
-    print("\n  🟢 STRESS TEST COMPLETE. Server tetap stabil tanpa race condition atau crash.")
+  ct_data = r.json()
+  dec_payload = {
+      "key_name": KEY_NAME,
+      "ciphertext_b64": ct_data["ciphertext_b64"],
+      "tier": "b",
+  }
 
+  async def execute_stress():
+    connector = aiohttp.TCPConnector(limit=100)
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(
+        connector=connector, timeout=timeout
+    ) as session:
+
+      # F1: 500 Concurrent Encrypts (distribusi across 25 keys)
+      start = time.time()
+      tasks = [
+          stress_worker(
+              session,
+              base_url,
+              "encrypt",
+              get_stress_headers(key_pool[i % len(key_pool)]),
+              enc_payload,
+          )
+          for i in range(500)
+      ]
+      results_enc = await asyncio.gather(*tasks)
+      time_enc = time.time() - start
+      success_enc = sum(1 for r in results_enc if r == 200)
+      t(
+          "F1 500x Concurrent Encrypt (25-key pool)",
+          success_enc == 500,
+          f"{success_enc}/500 success ({time_enc:.2f}s)",
+      )
+
+      # F2: 500 Concurrent Decrypts (distribusi across 25 keys)
+      start = time.time()
+      tasks = [
+          stress_worker(
+              session,
+              base_url,
+              "decrypt",
+              get_stress_headers(key_pool[i % len(key_pool)]),
+              dec_payload,
+          )
+          for i in range(500)
+      ]
+      results_dec = await asyncio.gather(*tasks)
+      time_dec = time.time() - start
+      success_dec = sum(1 for r in results_dec if r == 200)
+      t(
+          "F2 500x Concurrent Decrypt (25-key pool)",
+          success_dec == 500,
+          f"{success_dec}/500 success ({time_dec:.2f}s)",
+      )
+
+      # F3: 200 Concurrent Invalid Auth (Brute-force resilience)
+      start = time.time()
+      bad_headers = get_stress_headers("fcr_invalid_key_stress_test_0000")
+      tasks = [
+          stress_worker(session, base_url, "encrypt", bad_headers, enc_payload)
+          for _ in range(200)
+      ]
+      results_bad = await asyncio.gather(*tasks)
+      time_bad = time.time() - start
+      auth_reject = sum(1 for r in results_bad if r == 401)
+      server_error = sum(1 for r in results_bad if r >= 500)
+      t(
+          "F3 200x Concurrent Invalid Auth (No 5xx)",
+          auth_reject == 200 and server_error == 0,
+          f"{auth_reject}/200 rejected, {server_error} 5xx ({time_bad:.2f}s)",
+      )
+
+  asyncio.run(execute_stress())
+
+
+# ==============================================================
+#   G. ADVERSARIAL PROTOCOL & EDGE CASES (Audit Readiness)
+# ==============================================================
+def run_adversarial_edge_tests():
+  section("G. ADVERSARIAL PROTOCOL & EDGE CASES (6 Assertions)")
+
+  # G1: Future Timestamp Injection (+600 detik ke masa depan -> wajib 401/400 atau honeypot)
+  k, _, _ = make_api_key("G1")
+  r_fut = enc(k, ts=now_ts(600))
+  is_safe_fut = (r_fut.status_code in (400, 401)) or is_honeypot(r_fut)
+  t(
+      "G1 Future timestamp (+600s) → blocked or honeypot",
+      is_safe_fut,
+      f"status={r_fut.status_code}, honeypot={is_honeypot(r_fut)}",
+  )
+
+  # G2: Bidirectional Cross-Tier Isolation (Enc A -> Dec B & Enc B -> Dec A)
+  k, _, _ = make_api_key("G2")
+  r_a = enc(k, tier="a")
+  r_b = enc(k, tier="b")
+  if r_a.status_code == 200 and r_b.status_code == 200:
+    ct_a = r_a.json()["ciphertext_b64"]
+    ct_b = r_b.json()["ciphertext_b64"]
+    dec_a_as_b = dec(k, ct_a, tier="b")
+    dec_b_as_a = dec(k, ct_b, tier="a")
+    isolated = (dec_a_as_b.status_code != 200) and (
+        dec_b_as_a.status_code != 200
+    )
+    t(
+        "G2 Bidirectional Cross-Tier Isolation (A↔B) → reject",
+        isolated,
+        f"A->B={dec_a_as_b.status_code}, B->A={dec_b_as_a.status_code}",
+    )
+  else:
+    t("G2 Bidirectional Cross-Tier Isolation", False, "Initial encrypt failed")
+
+  # G3: Out-of-bounds & Non-Finite GPS Coordinates (999.9 & NaN)
+  k, _, _ = make_api_key("G3")
+  r_gps_oob = enc(k, lat="999.9999", lon="-999.9999")
+  r_gps_nan = enc(k, lat="NaN", lon="106.8456")
+  t(
+      "G3 Invalid GPS bounds (999.9 & NaN) → reject (400)",
+      r_gps_oob.status_code == 400 and r_gps_nan.status_code == 400,
+      f"oob={r_gps_oob.status_code}, nan={r_gps_nan.status_code}",
+  )
+
+  # G4: Negative & Infinite Latency Injection (Spoofed telemetry)
+  k, _, _ = make_api_key("G4")
+  r_lat_neg = enc(k, latency="-50.0")
+  r_lat_inf = enc(k, latency="inf")
+  t(
+      "G4 Negative/Infinite latency (-50.0 & inf) → reject (400)",
+      r_lat_neg.status_code == 400 and r_lat_inf.status_code == 400,
+      f"neg={r_lat_neg.status_code}, inf={r_lat_inf.status_code}",
+  )
+
+  # G5: Unicode, Control Char & Emoji UTF-8 Payload Integrity
+  k, _, _ = make_api_key("G5")
+  nasty_payload = "Rahasia\x00NullByte\x07\x1b[31m🔐🚀漢字"
+  r_uni = enc(k, text=nasty_payload)
+  dec_uni = (
+      get_decrypted_text(k, r_uni.json()["ciphertext_b64"])
+      if r_uni.status_code == 200
+      else None
+  )
+  t("G5 Null-byte, ANSI & Emoji UTF-8 round-trip", dec_uni == nasty_payload)
+
+  # G6: Invalid Tier Parameter (Empty & Unknown)
+  k, _, _ = make_api_key("G6")
+  r_bad_tier = enc(k, tier="tier_dewa")
+  r_empty_tier = enc(k, tier="   ")
+  t(
+      "G6 Unknown/Empty tier parameter → reject (400)",
+      r_bad_tier.status_code == 400 and r_empty_tier.status_code == 400,
+      f"unknown={r_bad_tier.status_code}, empty={r_empty_tier.status_code}",
+  )
 
 # ==============================================================
 #  EKSEKUSI UTAMA & SUMMARY FINAL
 # ==============================================================
 if __name__ == "__main__":
-    # Panggil stress test di paling akhir (setelah A-E selesai dijalankan di module level)
-    run_stress_tests()
-    
-    print("\n==============================================================")
-    print("  📊 BRUTAL TEST SUMMARY (INCLUDING STRESS)")
-    print("==============================================================")
-    
-    # Total sekarang akan otomatis menjadi 39 (36 lama + 3 baru dari Kategori F)
-    total = RESULTS["PASS"] + RESULTS["FAIL"]
-    print(f"  Total : {total} assertions")
-    print(f"  PASS  : {RESULTS['PASS']}")
-    print(f"  FAIL  : {RESULTS['FAIL']}")
-        
-    if RESULTS["FAIL"]:
-        print("\n❌ YANG GAGAL:")
-        for ok, name, note in RESULTS["DETAILS"]:
-            if not ok: 
-                print(f"     - {name}  ({note})")
-        sys.exit(1)
-        
-    print("\n  🟢 SEMUA KLAIM DESAIN FCR-RSA TERVERIFIKASI SECARA BRUTAL & CONCURRENT.")
-    sys.exit(0)
+  run_stress_tests()
+  run_adversarial_edge_tests()
+
+  print("\n==============================================================")
+  print("  📊 BRUTAL TEST SUMMARY (45 AUDIT-GRADE ASSERTIONS)")
+  print("==============================================================")
+
+  total = RESULTS["PASS"] + RESULTS["FAIL"]
+  print(f"  Total : {total} assertions")
+  print(f"  PASS  : {RESULTS['PASS']}")
+  print(f"  FAIL  : {RESULTS['FAIL']}")
+
+  if RESULTS["FAIL"]:
+    print("\n❌ YANG GAGAL:")
+    for ok, name, note in RESULTS["DETAILS"]:
+      if not ok:
+        print(f"     - {name}  ({note})")
+    sys.exit(1)
+
+  print(
+      "\n  🟢 SEMUA 45 KLAIM DESAIN FCR-RSA TERVERIFIKASI SECARA BRUTAL,"
+      " CONCURRENT & ADVERSARIAL."
+  )
+  sys.exit(0)

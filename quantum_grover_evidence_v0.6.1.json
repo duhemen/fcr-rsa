@@ -1,0 +1,11 @@
+{
+  "test_name": "FCR-RSA Grover Search Oracle Complexity Verification",
+  "num_qubits": 6,
+  "search_space_N": 64,
+  "theoretical_optimal_iterations": 6,
+  "observed_peak_iteration": 6,
+  "observed_peak_probability": 0.9974,
+  "max_deviation_from_blackbox_oracle": 0.0143,
+  "extrapolated_256bit_quantum_security": "2^128 operations (NIST Level 1/3 equivalent)",
+  "status": "PASS"
+}

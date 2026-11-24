@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "source": "fcr-engine\\test_vectors_v0.6.0.json",
+    "derivation": "SHA-256(master_seed || BLINDING_NONCE) -> Non-Linear Fibonacci",
+    "num_qubits": 6,
+    "shots": 8192
+  },
+  "results": [
+    {
+      "id": "TC-001",
+      "seed_source": "ciphertext[BLINDING_NONCE]",
+      "entropy_bits": 5.7134,
+      "delta_vs_reference": 2.7141,
+      "dominant_residue_mod8": 0,
+      "top5": [
+        [
+          40,
+          295
+        ],
+        [
+          48,
+          294
+        ],
+        [
+          32,
+          292
+        ],
+        [
+          16,
+          291
+        ],
+        [
+          56,
+          290
+        ]
+      ]
+    },
+    {
+      "id": "TC-003",
+      "seed_source": "honeypot_decoy_context",
+      "entropy_bits": 5.5775,
+      "delta_vs_reference": 2.5782,
+      "dominant_residue_mod8": 6,
+      "top5": [
+        [
+          30,
+          315
+        ],
+        [
+          6,
+          310
+        ],
+        [
+          14,
+          307
+        ],
+        [
+          46,
+          300
+        ],
+        [
+          62,
+          298
+        ]
+      ]
+    },
+    {
+      "id": "TC-002",
+      "seed_source": "blinding_override",
+      "entropy_bits": 4.8414,
+      "delta_vs_reference": 1.8421,
+      "determinism_verified": true
+    }
+  ],
+  "conclusion": {
+    "blinding_effective": true,
+    "determinism": true,
+    "honeypot_isolation": true,
+    "status": "PASS"
+  }
+}
