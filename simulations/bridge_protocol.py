@@ -1,59 +1,75 @@
 import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from src.fcr_tier_a import TierA_Enterprise
-from src.fcr_tier_b import TierB_EndUser
-from src.auto_immune import AutoImmuneSystem
+# Arahkan path ke direktori 'fcr-python' agar paket 'fcr_rsa' dapat diimpor
+ROOT_DIR = Path(__file__).resolve().parent.parent
+FCR_PYTHON_DIR = ROOT_DIR / "fcr-python"
+
+if str(FCR_PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(FCR_PYTHON_DIR))
+
+from fcr_rsa import tier_a, tier_b
+from fcr_rsa.auto_immune import SpatiotemporalToken, check_anomaly
+
 
 def main():
     print("=== SIMULASI FCR-RSA BRIDGE PROTOCOL (TIER A & TIER B) ===\n")
 
-    # 1. Inisialisasi Bank (Tier A)
-    bank = TierA_Enterprise()
-    bank_master_key = bank.generate_master_key()
+    # 1. Konfigurasi Parameter Kriptografi Bersama
+    seed = b"fcr-rsa-shared-master-seed-2026"
+    n = 16
+    q = 104729  # Bilangan prima modulus
+    pesan_transaksi = 42069
 
-    # 2. Inisialisasi HP Nasabah (Tier B)
-    hp_budi = TierB_EndUser(device_id="HP-BUDI-123")
-    
-    # 3. Nasabah Membuat Session Token untuk Transaksi
-    session_token = hp_budi.create_session_token(bank_master_key['public_key'])
+    # 2. Tier B (HP Nasabah) Melakukan Enkripsi Session Token
+    blinding_b = tier_b.generate_random_blinding(q)
+    cipher_b = tier_b.encrypt_with_blinding(pesan_transaksi, seed, n, q, blinding_b)
+    print(f"[Tier B - Nasabah] Pesan asli: {pesan_transaksi} -> Ciphertext: {cipher_b}")
 
-    # 4. Jembatan Komunikasi (Bridge)
-    # Bank menerima token dan memverifikasinya
+    # 3. Tier A (Server Bank) Melakukan Enkripsi & Dekripsi Verifikasi
+    blinding_a = 12345
+    cipher_a = tier_a.encrypt(pesan_transaksi, seed, n, q, blinding_a)
+    decrypted_a = tier_a.decrypt(cipher_a, seed, n, q, blinding_a)
+    decrypted_b = tier_b.decrypt(cipher_b, seed, n, q, blinding_b)
+
     print("\n--- [JEMBATAN KOMUNIKASI] ---")
-    is_valid = bank.verify_session_key(session_token)
+    if decrypted_a == pesan_transaksi and decrypted_b == pesan_transaksi:
+        print("✅ Bank memverifikasi kriptografi Tier A & Tier B valid. Transaksi diizinkan.")
 
-    if is_valid:
-        print("✅ Bank menerima token. Transaksi diizinkan.")
-        
-        # 5. Sistem Auto-Imun Memeriksa Konteks Transaksi
-        immune = AutoImmuneSystem()
-        
-        # Skenario A: Transaksi Normal dari Jakarta
+        # 4. Sistem Auto-Imun Memeriksa Konteks Spatiotemporal
+        waktu_awal = datetime.now(timezone.utc)
+        token_sebelumnya = SpatiotemporalToken(
+            gps_lat=-6.2088,  # Jakarta
+            gps_lon=106.8456,
+            timestamp=waktu_awal,
+            latency_ms=45.0,
+        )
+
+        # Skenario A: Transaksi Normal (10 menit kemudian, lokasi bergeser wajar)
         print("\n[Simulasi Transaksi Normal]")
-        status, msg = immune.check_transaction(
-            device_gps=1.2,       # GPS Jakarta
-            transaction_time=10,  # Jam 10 Pagi
-            expected_gps=1.0,     # Sesuai ekspektasi
-            allowed_hours=(8, 17),
-            network_delay_ms=45   # Jaringan normal
+        token_normal = SpatiotemporalToken(
+            gps_lat=-6.2150,
+            gps_lon=106.8500,
+            timestamp=waktu_awal + timedelta(minutes=10),
+            latency_ms=50.0,
         )
-        print(f"Hasil: {msg}")
+        anomali_a = check_anomaly(token_normal, token_sebelumnya)
+        print(f"Status: {'AMAN' if not anomali_a else anomali_a}")
 
-        # Skenario B: Serangan MITM (Peretas Menyadap)
-        print("\n[Simulasi Serangan MITM]")
-        status, msg = immune.check_transaction(
-            device_gps=1.1, 
-            transaction_time=10, 
-            expected_gps=1.0, 
-            allowed_hours=(8, 17),
-            network_delay_ms=300  # Jaringan melambat karena disadap
+        # Skenario B: Serangan MITM / Impossible Travel (1 menit kemudian pindah ke Surabaya & latency tinggi)
+        print("\n[Simulasi Serangan MITM / Anomali Lokasi]")
+        token_serangan = SpatiotemporalToken(
+            gps_lat=-7.2575,  # Surabaya (~660 km dalam 1 menit)
+            gps_lon=112.7521,
+            timestamp=waktu_awal + timedelta(minutes=1),
+            latency_ms=650.0,  # Melebihi batas 500 ms
         )
-        print(f"Hasil: {msg}")
-
+        anomali_b = check_anomaly(token_serangan, token_sebelumnya)
+        print(f"Status: {'AMAN' if not anomali_b else f'DITOLAK -> {anomali_b}'}")
     else:
-        print("❌ Token tidak valid. Transaksi ditolak.")
+        print("❌ Verifikasi kriptografi gagal. Transaksi ditolak.")
+
 
 if __name__ == "__main__":
     main()

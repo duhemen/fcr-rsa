@@ -48,3 +48,5 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 CREATE INDEX IF NOT EXISTS idx_anomaly_events_api_key_id ON anomaly_events(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_cooldowns_api_key_id ON cooldowns(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_cooldowns_expires_at ON cooldowns(expires_at);
+
+CREATE OR REPLACE VIEW keys AS SELECT * FROM api_keys;
