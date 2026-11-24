@@ -1,0 +1,12 @@
+name = "fcr_formal"
+version = "0.1.0"
+defaultTargets = ["FcrFormal"]
+
+[[lean_lib]]
+name = "FcrFormal"
+globs = ["FcrConstantTime"]
+
+[[require]]
+name = "std"
+git = "https://github.com/leanprover/std4"
+rev = "v4.36.0"
