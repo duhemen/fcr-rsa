@@ -80,19 +80,23 @@ jobs:
 
 
   # ============================================================
-  # 4. QUANTUM SIMULATIONS (Qiskit QFT Blinding & Grover Oracle)
+  # 4. QUANTUM SIMULATIONS (Qiskit QFT, Grover & BKZ Lattice)
   # ============================================================
   quantum-simulations:
-    name: Quantum Simulations (QFT & Grover)
+    name: Quantum & Lattice Simulations
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install Qiskit & Scientific Stack
-        run: pip install numpy scipy sympy scikit-learn matplotlib qiskit qiskit-aer
-      - name: Run Quantum Blinding & Grover Scripts
+      - name: Install System Libraries for fpylll (BKZ/LLL)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfplll-dev libgmp-dev libmpfr-dev libqd-dev
+      - name: Install Qiskit, fpylll & Scientific Stack
+        run: pip install numpy scipy sympy scikit-learn matplotlib qiskit qiskit-aer fpylll
+      - name: Run Quantum & Lattice Simulation Scripts
         run: |
           for script in $(find simulations -name "*.py" | sort); do
             echo "🚀 Menjalankan simulasi: $script"
