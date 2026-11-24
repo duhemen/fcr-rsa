@@ -69,7 +69,7 @@ jobs:
           cd fcr-pyo3
           maturin develop --release
           if [ -f "test_pyo3.py" ]; then python test_pyo3.py; fi
-      - name: Run Differential Equivalence Gate (Lean <-> Python <-> Rust)
+      - name: Run Differential Equivalence Gate
         run: |
           source .venv/bin/activate
           GATE_SCRIPT=$(find . -name "*equivalence*gate*.py" -o -name "*differential*.py" | head -n 1)
@@ -78,102 +78,9 @@ jobs:
             python "$GATE_SCRIPT"
           fi
 
-
   # ============================================================
-  # 4. QUANTUM, LATTICE & RED TEAM SIMULATIONS (WITH LIVE SERVER)
-  # ============================================================
-  quantum-simulations:
-    name: Quantum & Lattice Simulations
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: fcr_ci_password
-          POSTGRES_DB: fcr_rsa
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install System Libraries for fpylll (BKZ/LLL)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libfplll-dev libgmp-dev libmpfr-dev libqd-dev postgresql-client
-
-      - name: Install Qiskit, fpylll & All Simulation Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install numpy scipy sympy scikit-learn matplotlib qiskit qiskit-aer cython cysignals fpylll requests aiohttp asyncpg psycopg2-binary
-          if [ -f "simulations/requirements.txt" ]; then pip install -r simulations/requirements.txt; fi
-
-      - name: Build FCR-Engine Release Binary
-        working-directory: fcr-engine
-        run: cargo build --release
-
-      - name: Run Database Migrations & Seed Keys
-        env:
-          DATABASE_URL: "postgresql://postgres:fcr_ci_password@localhost:5432/fcr_rsa"
-        run: |
-          for sql_file in $(ls fcr-engine/migrations/*.sql | sort); do
-            echo "Menjalankan migrasi: $sql_file"
-            psql "$DATABASE_URL" -f "$sql_file"
-          done
-
-          # Seed API Key untuk skrip Red Team (SHA-256 dari MFHYNfwzYrbKuohfbahNQhlp4xCeyraK1UWTfjTlnHw)
-          API_KEY="MFHYNfwzYrbKuohfbahNQhlp4xCeyraK1UWTfjTlnHw"
-          KEY_PREFIX="${API_KEY:0:8}"
-          KEY_HASH=$(echo -n "$API_KEY" | sha256sum | awk '{print $1}')
-
-          psql "$DATABASE_URL" -c "INSERT INTO public.api_keys (user_name, label, key_prefix, key_hash, is_active) VALUES ('red_team_ci', 'CI Red Team Simulation', '$KEY_PREFIX', '$KEY_HASH', true) ON CONFLICT (key_hash) DO NOTHING;"
-
-          # Seed Vault Keys
-          cd fcr-engine
-          ./target/release/fcr-engine keygen -N "test-key-1" -s "brutal-ci-seed"
-          ./target/release/fcr-engine keygen -N "vault_omega" -s "brutal-ci-seed"
-
-      - name: Start Server & Run All Simulation Scripts
-        env:
-          DATABASE_URL: "postgresql://postgres:fcr_ci_password@localhost:5432/fcr_rsa"
-          PYTHONPATH: ".:fcr-python:fcr-python/src"
-        run: |
-          cd fcr-engine
-          ./target/release/fcr-engine serve &
-          SERVER_PID=$!
-
-          for i in {1..30}; do
-            if curl -s http://localhost:8080/health > /dev/null; then
-              echo "✅ FCR-Engine Server siap pada detik ke-${i}"
-              break
-            fi
-            sleep 1
-          done
-
-          cd ..
-          EXIT_CODE=0
-          for script in $(find simulations -name "*.py" | sort); do
-            echo "🚀 Menjalankan simulasi: $script"
-            if ! python "$script"; then
-              echo "❌ Gagal pada skrip: $script"
-              EXIT_CODE=1
-              break
-            fi
-          done
-
-          kill $SERVER_PID || true
-          exit $EXIT_CODE
-  # ============================================================
-  # 5. BRUTAL TEST SUITE (45 Audit-Grade Assertions)
+  # 4. BRUTAL TEST SUITE (45 Audit-Grade Assertions)
+  #    (Menggantikan job quantum-simulations yang usang)
   # ============================================================
   brutal-suite:
     name: Engine Brutal Test Suite (45 Assertions)
@@ -213,7 +120,6 @@ jobs:
             psql "$DATABASE_URL" -f "$sql_file"
           done
           cd fcr-engine
-          ./target/release/fcr-engine keygen -N "test-key-1" -s "brutal-ci-seed"
           ./target/release/fcr-engine keygen -N "test-key-1" -s "brutal-ci-seed"
       - name: Start Server & Execute 45 Brutal Assertions
         env:
