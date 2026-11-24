@@ -47,7 +47,7 @@ jobs:
           echo "✅ Rust Equivalence Test Passed"
 
   # ============================================================
-  # 3. Brutal Test Suite (Integration & Stress)
+  # 3. Brutal Test Suite (45 Assertions)
   # ============================================================
   brutal-suite:
     name: Brutal Test Suite (45 Assertions)
@@ -69,26 +69,64 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      - name: Install Python Dependencies
+          python-version: '3.11'
+
+      # ✅ PERBAIKAN: Buat venv eksplisit untuk hindari PEP 668
+      - name: Create Virtual Environment & Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install aiohttp asyncpg psycopg2-binary
-      - name: Build & Run Engine
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          # Install SEMUA dependensi yang dibutuhkan test_brutal_suite.py
+          pip install aiohttp asyncpg psycopg2-binary requests
+          echo "✅ Python venv ready"
+          pip list | grep -E "(aiohttp|asyncpg|psycopg2|requests)"
+
+      - name: Build Engine Release Binary
+        run: |
+          cd fcr-engine
+          cargo build --release
+
+      - name: Run Server & Brutal Test Suite
         env:
           DATABASE_URL: "postgresql://postgres:Bp2jk%40kalteng123@localhost:5432/fcr_rsa"
         run: |
+          # Aktifkan venv di shell yang sama (PENTING!)
+          source .venv/bin/activate
+          
           echo "🚀 Memulai FCR-Engine Server..."
           cd fcr-engine
-          cargo build --release
+          
+          # Jalankan biner rilis di background
           DATABASE_URL=$DATABASE_URL ./target/release/fcr-engine serve &
           SERVER_PID=$!
-          echo "⏳ Menunggu server siap (10 detik)..."
-          sleep 10
-          echo "🔥 Menjalankan Brutal Test Suite..."
+          
+          # Tunggu server siap (dengan health check loop yang lebih robust)
+          echo "⏳ Menunggu server siap..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8080/health > /dev/null; then
+              echo "✅ Server siap setelah ${i} detik"
+              break
+            fi
+            sleep 1
+          done
+          
+          echo "🔥 Menjalankan Brutal Test Suite (45 Assertions)..."
           DATABASE_URL=$DATABASE_URL python test_brutal_suite.py
+          TEST_EXIT=$?
+          
+          # Matikan server
           kill $SERVER_PID || true
-          echo "✅ Brutal Test Suite Selesai"
+          
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "❌ Brutal Test Suite GAGAL"
+            exit 1
+          fi
+          echo "✅ Brutal Test Suite Selesai (45/45 PASS)"
