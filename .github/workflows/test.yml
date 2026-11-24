@@ -97,12 +97,13 @@ jobs:
       - name: Install Qiskit, fpylll & Scientific Stack
         run: pip install numpy scipy sympy scikit-learn matplotlib qiskit qiskit-aer cython cysignals fpylll
       - name: Run Quantum & Lattice Simulation Scripts
+        env:
+          PYTHONPATH: ".:fcr-python:fcr-python/src"
         run: |
           for script in $(find simulations -name "*.py" | sort); do
             echo "🚀 Menjalankan simulasi: $script"
             python "$script"
           done
-
   # ============================================================
   # 5. BRUTAL TEST SUITE (45 Audit-Grade Assertions)
   # ============================================================
@@ -139,8 +140,12 @@ jobs:
         env:
           DATABASE_URL: "postgresql://postgres:fcr_ci_password@localhost:5432/fcr_rsa"
         run: |
-          psql "$DATABASE_URL" -f fcr-engine/migrations/001_init.sql
+          for sql_file in $(ls fcr-engine/migrations/*.sql | sort); do
+            echo "Menjalankan migrasi: $sql_file"
+            psql "$DATABASE_URL" -f "$sql_file"
+          done
           cd fcr-engine
+          ./target/release/fcr-engine keygen -N "test-key-1" -s "brutal-ci-seed"
           ./target/release/fcr-engine keygen -N "test-key-1" -s "brutal-ci-seed"
       - name: Start Server & Execute 45 Brutal Assertions
         env:
