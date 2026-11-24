@@ -3,6 +3,7 @@
 [advisories]
 version = 2
 yanked = "warn"
+unmatched = "allow"
 ignore = [
     "RUSTSEC-2024-0436", # paste (dev-dependency macro)
     "RUSTSEC-2026-0543", # chrono (informational unmaintained)
@@ -24,6 +25,7 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
