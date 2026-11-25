@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! FCR-TP (FCR Transport Protocol)
+//! 
+//! Protokol lapisan transport yang aman, adaptif, dan ramah pengguna
+//! untuk ekosistem FCR-RSA. Dirancang untuk tahan terhadap analisis lalu lintas
+//! (Traffic Analysis) di era superposisi dan ASI.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod packet;
+pub mod hopper;
+pub mod crypto;
+pub mod defense;
+pub mod survival;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Ekspor tipe utama agar mudah diakses dari luar crate
+pub use packet::FcrTpFrame;
+pub use packet::HeaderMode;
