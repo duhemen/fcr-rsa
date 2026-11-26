@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 
 /// Profil karakteristik link jaringan (Heuristik)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LinkProfile {
     Fiber,       // RTT rendah, Jitter sangat rendah
     Cellular,    // RTT sedang/tinggi, Jitter tinggi (radio scheduling)
@@ -176,6 +177,11 @@ impl SurvivalModeController {
     }
 
     pub fn update_metrics(&mut self, metrics: NetworkMetrics) -> SurvivalPolicy {
+        // FIX: NaN / loss di luar [0,1] sebelumnya meracuni health score (NaN menyebar ke semua perbandingan)
+        if !metrics.rtt_ms.is_finite() || !metrics.jitter_ms.is_finite() || !metrics.loss_rate.is_finite() || !metrics.throughput_bps.is_finite() {
+            return self.current_policy();
+        }
+        let metrics = NetworkMetrics { loss_rate: metrics.loss_rate.clamp(0.0, 1.0), ..metrics };
         if self.metrics_history.len() >= self.max_history {
             self.metrics_history.pop_front();
         }

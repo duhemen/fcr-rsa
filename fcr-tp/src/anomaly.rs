@@ -223,7 +223,9 @@ impl MetaLearner {
             AnomalyType::BurstTraffic | AnomalyType::ExtremeJitter
         );
         
+        // FIX: single_dimension_count sebelumnya tidak pernah dihitung
         if is_single_dimension {
+            self.single_dimension_count += 1;
             if is_persistent {
                 self.persistent_count += 1;
             } else {
@@ -738,9 +740,8 @@ impl AnomalyDetector {
         let now = timestamp;
         
         // 1. Hitung IAT (jika ada sampel sebelumnya)
-        let iat_opt = self.last_arrival.map(|last| {
-            now.duration_since(last).as_secs_f64() * 1000.0
-        });
+        // FIX: checked_duration_since — duration_since() panic jika timestamp mundur
+        let iat_opt = self.last_arrival.and_then(|last| now.checked_duration_since(last)).map(|d| d.as_secs_f64() * 1000.0);
         self.last_arrival = Some(now);
         
         // 2. Update threshold aktif (A1 + A2 + profile hint)
@@ -825,7 +826,7 @@ impl AnomalyDetector {
         
         // 5. Grace period (A4)
         let final_report = if let Some(mut r) = report {
-            if self.grace_period.process(r.anomaly_type.clone()) {
+            if self.grace_period.process(r.anomaly_type) {
                 // Suppress: jangan return, tapi tetap catat untuk meta-learner
                 self.meta_learner.observe_anomaly(&r, false);
                 None
@@ -847,7 +848,7 @@ impl AnomalyDetector {
         }
         
         // 7. Meta-learner tune (A1)
-        if self.total_samples > 0 && self.total_samples % META_TUNE_INTERVAL == 0 {
+        if self.total_samples > 0 && self.total_samples.is_multiple_of(META_TUNE_INTERVAL) {
             self.meta_learner.tune();
         }
         

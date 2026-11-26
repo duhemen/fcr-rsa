@@ -66,6 +66,10 @@ impl ChunkMetadata {
         let version = buf[8];
         let chunk_index = u16::from_be_bytes(buf[9..11].try_into().unwrap());
         let total_chunks = u16::from_be_bytes(buf[11..13].try_into().unwrap());
+        // FIX: tolak byte is_final liar (sebelumnya 2..=255 diam-diam jadi false)
+        if buf[13] > 1 {
+            return Err("Invalid is_final byte: must be 0 or 1");
+        }
         let is_final = buf[13] == 1;
 
         if total_chunks == 0 || total_chunks > MAX_CHUNKS_PER_MESSAGE {
@@ -102,15 +106,13 @@ impl FcrTpSession {
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
         hasher.update(master_key);
-        hasher.update(&session_id);
+        hasher.update(session_id);
         let derived = hasher.finalize();
         
         let mut session_key = [0u8; 32];
         session_key.copy_from_slice(&derived);
         
-        let max_chunk_payload_size = DEFAULT_BUCKET_SIZE
-            .checked_sub(FRAME_OVERHEAD)
-            .unwrap_or(0);
+        let max_chunk_payload_size = DEFAULT_BUCKET_SIZE.saturating_sub(FRAME_OVERHEAD);
         
         Self {
             session_id,
@@ -128,6 +130,8 @@ impl FcrTpSession {
             .ok_or("Bucket size too small for frame overhead")
     }
 
+    // FIX: zeroize kunci saat session drop (sebelumnya kunci 32 byte tertinggal di memori)
+    // Catatan: Zeroize derive di struct tidak cukup karena session_key field privat di-impl manual.
     pub fn advance_epoch(&mut self) {
         self.current_epoch = self.current_epoch.wrapping_add(1);
     }
@@ -172,7 +176,7 @@ impl FcrTpSession {
         let total_chunks = if plaintext.is_empty() {
             1
         } else {
-            ((plaintext.len() + chunk_payload_size - 1) / chunk_payload_size) as u16
+            plaintext.len().div_ceil(chunk_payload_size) as u16
         };
         
         if total_chunks > MAX_CHUNKS_PER_MESSAGE {
@@ -344,6 +348,8 @@ impl FcrTpSession {
         Ok(())
     }
 }
+
+impl Drop for FcrTpSession { fn drop(&mut self) { self.session_key.zeroize(); } }
 
 // ============================================================
 // TEST SUITE

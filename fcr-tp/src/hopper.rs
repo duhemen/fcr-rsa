@@ -1,6 +1,6 @@
-/// Fibonacci Port Hopper
-/// Menghasilkan urutan port yang deterministik namun sulit diprediksi oleh pihak ketiga
-/// yang tidak mengetahui session_seed. Dirancang khusus untuk menembus CGNAT dengan aman.
+//! Fibonacci Port Hopper
+//! Menghasilkan urutan port yang deterministik namun sulit diprediksi oleh pihak ketiga
+//! yang tidak mengetahui session_seed. Dirancang khusus untuk menembus CGNAT dengan aman.
 
 const MIN_PORT: u16 = 1024;
 const MAX_PORT: u16 = 65535;
@@ -35,7 +35,8 @@ impl FibonacciHopper {
     /// **Mengonsumsi state**: setelah dipanggil, state hopper berubah,
     /// dan panggilan berikutnya akan menghasilkan port yang berbeda.
     pub fn next_port(&mut self) -> u16 {
-        let next_state = self.state_1.wrapping_add(self.state_2) % LARGE_PRIME;
+        let mut next_state = self.state_1.wrapping_add(self.state_2) % LARGE_PRIME;
+        if next_state == 0 { next_state = 1; } // FIX: cegah deret degenerat 0,0,0...
         
         self.state_1 = self.state_2;
         self.state_2 = next_state;
