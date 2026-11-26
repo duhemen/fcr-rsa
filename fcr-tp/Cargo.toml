@@ -9,10 +9,16 @@ bytes = "1.5"
 zeroize = { version = "1.7", features = ["zeroize_derive"] }
 fcr-core-rust = { path = "../fcr-core-rust" }
 rand = "0.8"
+chacha20poly1305 = "0.10"
+sha2 = "0.10"
 
-# TAMBAHKAN INI:
-chacha20poly1305 = "0.10"  # AEAD encryption
-sha2 = "0.10"              # Untuk key derivation
+# ✅ OPTIONAL: serde untuk TechnicalDetails (kompatibel dengan fcr-engine REST API)
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = []
+# Aktifkan dengan: cargo build --features serde
+serde = ["dep:serde"]
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["full"] }

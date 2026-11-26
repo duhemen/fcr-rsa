@@ -1,4 +1,10 @@
-// src/reassembler.rs - VERSI FINAL (Hutang Lunas & Terintegrasi)
+// src/reassembler.rs - VERSI REVISI (Bug Fix + Test Semantik)
+// Perubahan:
+// 1. ForensicData.session_id: u64 -> [u8; 8] (konsisten dengan defense.rs & crypto.rs)
+// 2. ForensicData tambah source_port: u16 (untuk SpacetimeValidator)
+// 3. ForensicData tambah source_ip: Option<[u8; 4]> (forensic)
+// 4. Test diperbaiki: verifikasi semantik, bukan hanya "tidak panic"
+
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -21,18 +27,41 @@ impl From<u64> for MessageId {
     }
 }
 
+/// Data forensik yang menyertai setiap chunk.
+/// 
+/// REVISI: 
+/// - `session_id` sekarang `[u8; 8]` (konsisten dengan DefenseEngine & CryptoSession)
+/// - `source_port` ditambahkan agar SpacetimeValidator bisa memvalidasi port
+/// - `source_ip` ditambahkan untuk kebutuhan audit (opsional)
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForensicData {
     pub trace_id: String,
-    pub session_id: u64,
+    pub session_id: [u8; 8],          // ✅ FIX: dari u64 -> [u8; 8]
+    pub source_port: u16,             // ✅ FIX: field baru untuk SpacetimeValidator
+    pub source_ip: Option<[u8; 4]>,   // ✅ FIX: field baru untuk audit
     pub timestamp: Instant,
     pub rtt_ms: Option<u64>,
     pub packet_loss: Option<f32>,
 }
 
+impl ForensicData {
+    /// Konstruktor default dengan port dan IP netral (untuk test).
+    pub fn neutral(trace_id: impl Into<String>, session_id: [u8; 8]) -> Self {
+        Self {
+            trace_id: trace_id.into(),
+            session_id,
+            source_port: 0,
+            source_ip: None,
+            timestamp: Instant::now(),
+            rtt_ms: None,
+            packet_loss: None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct ReassemblyResult {
-    pub message_id: [u8; 32], // HUTANG DILUNASI: Jejak audit eksplisit di hasil
+    pub message_id: [u8; 32],
     pub payload: Bytes,
     pub is_complete: bool,
     pub missing_chunks: Vec<u16>,
@@ -50,14 +79,14 @@ pub enum ReassemblyError {
 
 #[derive(Debug, Clone)]
 struct BufferedChunk {
-    index: u16, // Akan divalidasi saat reassembly
+    index: u16,
     data: Bytes,
     received_at: Instant,
 }
 
 #[derive(Debug)]
 struct PendingMessage {
-    message_id: MessageId, // Akan digunakan untuk tracking forensik
+    message_id: MessageId,
     total_chunks: u16,
     chunks: HashMap<u16, BufferedChunk>,
     first_chunk_at: Instant,
@@ -83,7 +112,6 @@ impl Reassembler {
         }
     }
 
-    // Getter untuk testing dan observabilitas
     pub fn current_timeout(&self) -> Duration {
         self.default_timeout
     }
@@ -199,7 +227,6 @@ impl Reassembler {
         
         for i in 0..pending.total_chunks {
             if let Some(chunk) = pending.chunks.get(&i) {
-                // HUTANG DILUNASI: Validasi integritas index secara aktif (membaca field `index`)
                 debug_assert_eq!(chunk.index, i, "Forensic mismatch: chunk index tidak sesuai dengan urutan");
                 payload.extend_from_slice(&chunk.data);
             } else {
@@ -208,7 +235,7 @@ impl Reassembler {
         }
         
         Ok(ReassemblyResult {
-            message_id: pending.message_id.0, // HUTANG DILUNASI: Menggunakan field message_id
+            message_id: pending.message_id.0,
             payload: payload.freeze(),
             is_complete: missing_chunks.is_empty(),
             missing_chunks,
@@ -261,12 +288,22 @@ mod tests {
     use crate::crypto::ChunkMetadata;
     use crate::survival::{SurvivalPolicy, ControlTier, BucketSize};
     
+    const TEST_SESSION_ID: [u8; 8] = [0xAA; 8];
+    
     fn make_metadata(message_id: u64, chunk_index: u16, total_chunks: u16) -> ChunkMetadata {
         ChunkMetadata { message_id, version: 1, chunk_index, total_chunks, is_final: chunk_index == total_chunks - 1 }
     }
     
     fn make_forensic() -> ForensicData {
-        ForensicData { trace_id: "test-trace-123".to_string(), session_id: 42, timestamp: Instant::now(), rtt_ms: None, packet_loss: None }
+        ForensicData {
+            trace_id: "test-trace-123".to_string(),
+            session_id: TEST_SESSION_ID,
+            source_port: 50000,
+            source_ip: Some([127, 0, 0, 1]),
+            timestamp: Instant::now(),
+            rtt_ms: Some(100),
+            packet_loss: None,
+        }
     }
 
     #[test]
@@ -278,7 +315,7 @@ mod tests {
         assert!(result.is_some());
         let res = result.unwrap();
         assert_eq!(res.payload, data);
-        assert_eq!(res.message_id, MessageId::from(1u64).0); // Validasi message_id baru
+        assert_eq!(res.message_id, MessageId::from(1u64).0);
     }
 
     #[test]
@@ -305,14 +342,14 @@ mod tests {
         let meta = make_metadata(4, 0, 2);
         let data = Bytes::from("test");
         reassembler.push_chunk(&meta, data.clone(), make_forensic()).unwrap();
-        reassembler.push_chunk(&meta, data, make_forensic()).unwrap(); // Harus diabaikan, bukan error
+        reassembler.push_chunk(&meta, data, make_forensic()).unwrap();
         assert_eq!(reassembler.pending_count(), 1);
     }
 
     #[test]
     fn test_invalid_chunk_index() {
         let mut reassembler = Reassembler::new();
-        let meta = make_metadata(5, 5, 3); // chunk_index >= total_chunks
+        let meta = make_metadata(5, 5, 3);
         let result = reassembler.push_chunk(&meta, Bytes::from("test"), make_forensic());
         assert_eq!(result, Err(ReassemblyError::InvalidChunk));
     }
@@ -321,7 +358,7 @@ mod tests {
     fn test_inconsistent_total_chunks() {
         let mut reassembler = Reassembler::new();
         reassembler.push_chunk(&make_metadata(6, 0, 3), Bytes::from("test"), make_forensic()).unwrap();
-        let result = reassembler.push_chunk(&make_metadata(6, 1, 5), Bytes::from("test2"), make_forensic()); // Total chunks berubah
+        let result = reassembler.push_chunk(&make_metadata(6, 1, 5), Bytes::from("test2"), make_forensic());
         assert_eq!(result, Err(ReassemblyError::InvalidChunk));
     }
 
@@ -351,8 +388,8 @@ mod tests {
 
     #[test]
     fn test_adaptive_timeout_calculation() {
-        let timeout = Reassembler::calculate_timeout(100, 0.1); // 100ms RTT, 10% loss
-        assert!(timeout > Duration::from_millis(300)); // 3x RTT + penalty
+        let timeout = Reassembler::calculate_timeout(100, 0.1);
+        assert!(timeout > Duration::from_millis(300));
     }
 
     #[test]
@@ -373,11 +410,11 @@ mod tests {
         let mut reassembler = Reassembler::new();
         let mut forensic = make_forensic();
         forensic.trace_id = "custom-trace-456".to_string();
-        forensic.session_id = 99;
+        forensic.session_id = [0x99; 8];
         
         let result = reassembler.push_chunk(&make_metadata(9, 0, 1), Bytes::from("test"), forensic.clone()).unwrap().unwrap();
         assert_eq!(result.forensic_metadata.trace_id, "custom-trace-456");
-        assert_eq!(result.forensic_metadata.session_id, 99);
+        assert_eq!(result.forensic_metadata.session_id, [0x99; 8]);
     }
 
     #[test]
@@ -390,7 +427,7 @@ mod tests {
             enable_partial_assembly: true,
         };
         reassembler.apply_policy(&policy);
-        assert_eq!(reassembler.current_timeout(), Duration::from_millis(25000)); // 5000 * 5.0
+        assert_eq!(reassembler.current_timeout(), Duration::from_millis(25000));
     }
 
     #[test]
@@ -411,6 +448,57 @@ mod tests {
             "Loss rate mismatch: expected ~{}, got {}", 
             expected_loss, 
             metrics.loss_rate
+        );
+    }
+
+    // ============================================================
+    // ✅ TEST BARU: SEMANTIK FORENSIC DATA
+    // ============================================================
+    
+    #[test]
+    fn test_forensic_source_port_preserved() {
+        // Verifikasi bahwa source_port BENAR-BENAR diteruskan
+        let mut reassembler = Reassembler::new();
+        let mut forensic = make_forensic();
+        forensic.source_port = 54321;
+        
+        let result = reassembler.push_chunk(
+            &make_metadata(10, 0, 1),
+            Bytes::from("test"),
+            forensic,
+        ).unwrap().unwrap();
+        
+        assert_eq!(
+            result.forensic_metadata.source_port, 54321,
+            "source_port harus preserved, bukan diabaikan"
+        );
+    }
+    
+    #[test]
+    fn test_forensic_session_id_is_bytes() {
+        // Verifikasi bahwa session_id adalah [u8; 8] (bukan u64)
+        let forensic = make_forensic();
+        // Compile-time check: field harus [u8; 8]
+        let _sid: [u8; 8] = forensic.session_id;
+        assert_eq!(forensic.session_id.len(), 8);
+    }
+    
+    #[test]
+    fn test_forensic_source_ip_optional() {
+        // Verifikasi bahwa source_ip opsional
+        let mut reassembler = Reassembler::new();
+        let mut forensic = make_forensic();
+        forensic.source_ip = Some([192, 168, 1, 1]);
+        
+        let result = reassembler.push_chunk(
+            &make_metadata(11, 0, 1),
+            Bytes::from("test"),
+            forensic,
+        ).unwrap().unwrap();
+        
+        assert_eq!(
+            result.forensic_metadata.source_ip,
+            Some([192, 168, 1, 1])
         );
     }
 }

@@ -1,4 +1,10 @@
-// src/survival.rs
+// src/survival.rs - VERSI REVISI
+// Perubahan:
+// 1. Ekspor fungsi bebas `detect_link_profile_from_metrics` (untuk anomaly.rs)
+// 2. `SurvivalModeController::detect_link_profile` memanggil fungsi bebas (DRY)
+// 3. Tambah `LinkProfile::baseline_rtt()` dan `baseline_jitter()` (untuk anomaly.rs)
+// 4. Test baru untuk fungsi bebas
+
 use std::collections::VecDeque;
 
 /// Profil karakteristik link jaringan (Heuristik)
@@ -10,12 +16,64 @@ pub enum LinkProfile {
     Unknown,     // Belum teridentifikasi, menggunakan baseline dinamis
 }
 
+impl LinkProfile {
+    /// Baseline RTT per profil (ms) — untuk AdaptiveThreshold
+    pub fn baseline_rtt_ms(&self) -> f64 {
+        match self {
+            LinkProfile::Fiber => 20.0,
+            LinkProfile::Cellular => 80.0,
+            LinkProfile::Satellite => 600.0,
+            LinkProfile::Unknown => 200.0,
+        }
+    }
+
+    /// Baseline jitter per profil (ms)
+    pub fn baseline_jitter_ms(&self) -> f64 {
+        match self {
+            LinkProfile::Fiber => 5.0,
+            LinkProfile::Cellular => 30.0,
+            LinkProfile::Satellite => 20.0,
+            LinkProfile::Unknown => 20.0,
+        }
+    }
+
+    /// Nama profil untuk logging/UI
+    pub fn name(&self) -> &'static str {
+        match self {
+            LinkProfile::Fiber => "Fiber",
+            LinkProfile::Cellular => "Cellular",
+            LinkProfile::Satellite => "Satellite",
+            LinkProfile::Unknown => "Unknown",
+        }
+    }
+}
+
+/// ✅ FUNGSI BEBAS: Deteksi profil link dari metrik.
+/// 
+/// Ini adalah fungsi murni yang bisa dipanggil dari mana saja
+/// (termasuk `anomaly.rs`) tanpa perlu `SurvivalModeController`.
+pub fn detect_link_profile_from_metrics(
+    rtt_ms: f64,
+    jitter_ms: f64,
+    _loss_rate: f64,  // untuk masa depan, saat ini belum dipakai
+) -> LinkProfile {
+    if rtt_ms < 50.0 && jitter_ms < 10.0 {
+        LinkProfile::Fiber
+    } else if rtt_ms > 200.0 && jitter_ms < 30.0 {
+        LinkProfile::Satellite
+    } else if jitter_ms > 15.0 {
+        LinkProfile::Cellular
+    } else {
+        LinkProfile::Unknown
+    }
+}
+
 /// Metrik jaringan real-time
 #[derive(Debug, Clone, Copy)]
 pub struct NetworkMetrics {
     pub rtt_ms: f64,
     pub jitter_ms: f64,
-    pub loss_rate: f64,   // 0.0 - 1.0
+    pub loss_rate: f64,
     pub throughput_bps: f64,
 }
 
@@ -49,23 +107,23 @@ impl BucketSize {
 /// Tier kontrol untuk integrasi dengan Reassembler
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlTier {
-    Advisor, // Reassembler boleh menolak jika melanggar batas keamanan
-    Enforce, // Reassembler wajib mematuhi (kondisi kritis)
+    Advisor,
+    Enforce,
 }
 
-/// Kebijakan Survival Mode yang dikirim ke modul lain (Reassembler, Crypto)
+/// Kebijakan Survival Mode
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvivalPolicy {
     pub tier: ControlTier,
     pub suggested_bucket: BucketSize,
-    pub timeout_multiplier: f32, // Dikali dengan default timeout
+    pub timeout_multiplier: f32,
     pub enable_partial_assembly: bool,
 }
 
-/// State untuk transisi bucket (Hybrid: Hysteresis + Emergency Override)
+/// State untuk transisi bucket
 struct TransitionState {
     current_bucket: BucketSize,
-    hysteresis_counter: i32, // Positif = cenderung naik, Negatif = cenderung turun
+    hysteresis_counter: i32,
     last_change_time: std::time::Instant,
 }
 
@@ -80,43 +138,44 @@ pub struct SurvivalModeController {
 }
 
 impl SurvivalModeController {
-    pub const HYSTERESIS_THRESHOLD: i32 = 3; // Butuh 3 sampel berturut-turut untuk switch normal
-    pub const CRITICAL_SCORE_THRESHOLD: f64 = 0.2; // Di bawah ini = Emergency Override
+    pub const HYSTERESIS_THRESHOLD: i32 = 3;
+    pub const CRITICAL_SCORE_THRESHOLD: f64 = 0.2;
     pub const POOR_SCORE_THRESHOLD: f64 = 0.5;
     pub const GOOD_SCORE_THRESHOLD: f64 = 0.8;
 
     pub fn new() -> Self {
-    Self {
-        profile: LinkProfile::Unknown,
-        metrics_history: VecDeque::with_capacity(20),
-        transition: TransitionState {
-            current_bucket: BucketSize::B1200,
-            hysteresis_counter: 0,
-            last_change_time: std::time::Instant::now(),
-        },
-        max_history: 20,
-        last_score: NetworkHealthScore { total: 1.0, latency_score: 1.0, loss_score: 1.0, jitter_score: 1.0 }, // ← BARU
-        last_emergency: false,                                                                                   // ← BARU
+        Self {
+            profile: LinkProfile::Unknown,
+            metrics_history: VecDeque::with_capacity(20),
+            transition: TransitionState {
+                current_bucket: BucketSize::B1200,
+                hysteresis_counter: 0,
+                last_change_time: std::time::Instant::now(),
+            },
+            max_history: 20,
+            last_score: NetworkHealthScore { total: 1.0, latency_score: 1.0, loss_score: 1.0, jitter_score: 1.0 },
+            last_emergency: false,
+        }
     }
-}
 
-    /// Deteksi profil link berdasarkan metrik awal
+    /// Deteksi profil link berdasarkan metrik awal.
+    /// 
+    /// ✅ REVISI: sekarang memanggil fungsi bebas (DRY).
     pub fn detect_link_profile(&mut self, metrics: &NetworkMetrics) -> LinkProfile {
-        self.profile = if metrics.rtt_ms < 50.0 && metrics.jitter_ms < 10.0 {
-            LinkProfile::Fiber
-        } else if metrics.rtt_ms > 200.0 && metrics.jitter_ms < 30.0 {
-            LinkProfile::Satellite
-        } else if metrics.jitter_ms > 15.0 {
-            LinkProfile::Cellular
-        } else {
-            LinkProfile::Unknown
-        };
+        self.profile = detect_link_profile_from_metrics(
+            metrics.rtt_ms,
+            metrics.jitter_ms,
+            metrics.loss_rate,
+        );
         self.profile
     }
 
-    /// Update metrik dan dapatkan kebijakan survival terbaru
+    /// Dapatkan profil saat ini (tanpa mengubah)
+    pub fn current_profile(&self) -> LinkProfile {
+        self.profile
+    }
+
     pub fn update_metrics(&mut self, metrics: NetworkMetrics) -> SurvivalPolicy {
-        // Simpan history untuk moving average
         if self.metrics_history.len() >= self.max_history {
             self.metrics_history.pop_front();
         }
@@ -124,16 +183,14 @@ impl SurvivalModeController {
 
         let score = self.calculate_health_score(&metrics);
         let (new_bucket, is_emergency) = self.determine_bucket_size(&score);
-                self.last_score = score;
-                self.last_emergency = is_emergency;
-        // Update transition state
+        self.last_score = score;
+        self.last_emergency = is_emergency;
+
         if new_bucket != self.transition.current_bucket {
             if is_emergency {
-                // Emergency Override: Bypass hysteresis
                 self.transition.current_bucket = new_bucket;
                 self.transition.hysteresis_counter = 0;
             } else {
-                // Hysteresis: Accumulate counter
                 if new_bucket.as_bytes() < self.transition.current_bucket.as_bytes() {
                     self.transition.hysteresis_counter -= 1;
                 } else {
@@ -151,9 +208,7 @@ impl SurvivalModeController {
         self.generate_policy(score, is_emergency)
     }
 
-    /// Hitung skor kesehatan multi-dimensi
     fn calculate_health_score(&self, metrics: &NetworkMetrics) -> NetworkHealthScore {
-        // Normalisasi berdasarkan profil link
         let (rtt_baseline, jitter_baseline) = match self.profile {
             LinkProfile::Fiber => (50.0, 10.0),
             LinkProfile::Cellular => (150.0, 30.0),
@@ -165,7 +220,6 @@ impl SurvivalModeController {
         let jitter_score = (1.0 - (metrics.jitter_ms / (jitter_baseline * 3.0)).min(1.0)).max(0.0);
         let loss_score = (1.0 - metrics.loss_rate).max(0.0);
 
-        // Weighted scoring: Loss paling kritis, lalu Latency, lalu Jitter
         let total = (loss_score * 0.5) + (latency_score * 0.3) + (jitter_score * 0.2);
 
         NetworkHealthScore {
@@ -176,14 +230,11 @@ impl SurvivalModeController {
         }
     }
 
-    /// Tentukan ukuran bucket (Hybrid logic)
     fn determine_bucket_size(&self, score: &NetworkHealthScore) -> (BucketSize, bool) {
-        // Emergency Override
         if score.total < Self::CRITICAL_SCORE_THRESHOLD {
             return (BucketSize::B256, true);
         }
 
-        // Normal Hysteresis mapping
         let target = if score.total < Self::POOR_SCORE_THRESHOLD {
             BucketSize::B256
         } else if score.total < Self::GOOD_SCORE_THRESHOLD {
@@ -195,7 +246,6 @@ impl SurvivalModeController {
         (target, false)
     }
 
-    /// Generate kebijakan untuk modul lain
     fn generate_policy(&self, score: NetworkHealthScore, is_emergency: bool) -> SurvivalPolicy {
         let tier = if is_emergency || score.total < Self::POOR_SCORE_THRESHOLD {
             ControlTier::Enforce
@@ -203,9 +253,8 @@ impl SurvivalModeController {
             ControlTier::Advisor
         };
 
-        // Timeout multiplier: Semakin buruk jaringan, semakin longgar timeoutnya
         let timeout_multiplier = if score.total < Self::CRITICAL_SCORE_THRESHOLD {
-            5.0 // 5x default timeout untuk kondisi kritis
+            5.0
         } else if score.total < Self::POOR_SCORE_THRESHOLD {
             2.5
         } else {
@@ -220,7 +269,6 @@ impl SurvivalModeController {
         }
     }
 
-    /// Cermin jujur dari kondisi terkini (bisa dipanggil kapan saja oleh Reassembler)
     pub fn current_policy(&self) -> SurvivalPolicy {
         self.generate_policy(self.last_score, self.last_emergency)
     }
@@ -269,16 +317,14 @@ mod tests {
     #[test]
     fn test_normal_degradation_hysteresis() {
         let mut controller = SurvivalModeController::new();
-        controller.detect_link_profile(&make_metrics(10.0, 2.0, 0.0)); // Fiber
+        controller.detect_link_profile(&make_metrics(10.0, 2.0, 0.0));
 
-        // Kirim metrik buruk 2 kali (belum cukup untuk trigger hysteresis)
         let p1 = controller.update_metrics(make_metrics(200.0, 50.0, 0.3));
-        assert_eq!(p1.suggested_bucket, BucketSize::B1200); // Masih B1200 karena hysteresis
+        assert_eq!(p1.suggested_bucket, BucketSize::B1200);
 
         let p2 = controller.update_metrics(make_metrics(200.0, 50.0, 0.3));
         assert_eq!(p2.suggested_bucket, BucketSize::B1200);
 
-        // Kali ke-3, hysteresis tercapai, switch ke B256
         let p3 = controller.update_metrics(make_metrics(200.0, 50.0, 0.3));
         assert_eq!(p3.suggested_bucket, BucketSize::B256);
         assert_eq!(p3.tier, ControlTier::Enforce);
@@ -287,12 +333,9 @@ mod tests {
     #[test]
     fn test_emergency_override_bypasses_hysteresis() {
         let mut controller = SurvivalModeController::new();
-        controller.detect_link_profile(&make_metrics(10.0, 2.0, 0.0)); // Fiber
+        controller.detect_link_profile(&make_metrics(10.0, 2.0, 0.0));
 
-        // Kirim metrik KRITIS (loss 80%, RTT tinggi)
         let p1 = controller.update_metrics(make_metrics(1000.0, 100.0, 0.8));
-        
-        // Harus langsung switch ke B256 dan Enforce, tanpa menunggu hysteresis
         assert_eq!(p1.suggested_bucket, BucketSize::B256);
         assert_eq!(p1.tier, ControlTier::Enforce);
         assert!(p1.enable_partial_assembly);
@@ -304,31 +347,83 @@ mod tests {
         let mut controller = SurvivalModeController::new();
         controller.detect_link_profile(&make_metrics(10.0, 2.0, 0.0));
 
-        // Rusak jaringan
         for _ in 0..3 {
             controller.update_metrics(make_metrics(200.0, 50.0, 0.3));
         }
         assert_eq!(controller.current_policy().suggested_bucket, BucketSize::B256);
 
-        // Perbaiki jaringan
         let p1 = controller.update_metrics(make_metrics(10.0, 2.0, 0.0));
-        assert_eq!(p1.suggested_bucket, BucketSize::B256); // Belum naik
+        assert_eq!(p1.suggested_bucket, BucketSize::B256);
 
         let p2 = controller.update_metrics(make_metrics(10.0, 2.0, 0.0));
         assert_eq!(p2.suggested_bucket, BucketSize::B256);
 
         let p3 = controller.update_metrics(make_metrics(10.0, 2.0, 0.0));
-        assert_eq!(p3.suggested_bucket, BucketSize::B1200); // Naik kembali
+        assert_eq!(p3.suggested_bucket, BucketSize::B1200);
     }
 
     #[test]
     fn test_satellite_baseline_normalization() {
         let mut controller = SurvivalModeController::new();
-        controller.detect_link_profile(&make_metrics(600.0, 10.0, 0.0)); // Satellite
+        controller.detect_link_profile(&make_metrics(600.0, 10.0, 0.0));
 
-        // RTT 600ms di Satellite adalah NORMAL, skor harus tinggi
         let policy = controller.update_metrics(make_metrics(600.0, 10.0, 0.0));
         assert_eq!(policy.suggested_bucket, BucketSize::B1200);
         assert_eq!(policy.tier, ControlTier::Advisor);
+    }
+
+    // ============================================================
+    // ✅ TEST BARU: Fungsi bebas detect_link_profile_from_metrics
+    // ============================================================
+
+    #[test]
+    fn test_free_function_fiber() {
+        assert_eq!(detect_link_profile_from_metrics(10.0, 2.0, 0.0), LinkProfile::Fiber);
+    }
+
+    #[test]
+    fn test_free_function_satellite() {
+        assert_eq!(detect_link_profile_from_metrics(600.0, 10.0, 0.0), LinkProfile::Satellite);
+    }
+
+    #[test]
+    fn test_free_function_cellular() {
+        assert_eq!(detect_link_profile_from_metrics(100.0, 25.0, 0.05), LinkProfile::Cellular);
+    }
+
+    #[test]
+    fn test_free_function_unknown() {
+        assert_eq!(detect_link_profile_from_metrics(100.0, 10.0, 0.0), LinkProfile::Unknown);
+    }
+
+    #[test]
+    fn test_controller_uses_free_function() {
+        // Verifikasi bahwa controller dan fungsi bebas menghasilkan hasil sama
+        let mut controller = SurvivalModeController::new();
+        let metrics = make_metrics(10.0, 2.0, 0.0);
+        let from_controller = controller.detect_link_profile(&metrics);
+        let from_free = detect_link_profile_from_metrics(metrics.rtt_ms, metrics.jitter_ms, metrics.loss_rate);
+        assert_eq!(from_controller, from_free);
+    }
+
+    #[test]
+    fn test_baseline_methods() {
+        assert_eq!(LinkProfile::Fiber.baseline_rtt_ms(), 20.0);
+        assert_eq!(LinkProfile::Cellular.baseline_rtt_ms(), 80.0);
+        assert_eq!(LinkProfile::Satellite.baseline_rtt_ms(), 600.0);
+        assert_eq!(LinkProfile::Unknown.baseline_rtt_ms(), 200.0);
+
+        assert_eq!(LinkProfile::Fiber.baseline_jitter_ms(), 5.0);
+        assert_eq!(LinkProfile::Cellular.baseline_jitter_ms(), 30.0);
+        assert_eq!(LinkProfile::Satellite.baseline_jitter_ms(), 20.0);
+        assert_eq!(LinkProfile::Unknown.baseline_jitter_ms(), 20.0);
+    }
+
+    #[test]
+    fn test_profile_name() {
+        assert_eq!(LinkProfile::Fiber.name(), "Fiber");
+        assert_eq!(LinkProfile::Cellular.name(), "Cellular");
+        assert_eq!(LinkProfile::Satellite.name(), "Satellite");
+        assert_eq!(LinkProfile::Unknown.name(), "Unknown");
     }
 }
