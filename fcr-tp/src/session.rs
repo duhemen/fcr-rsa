@@ -46,26 +46,16 @@ impl TransportOrchestrator {
     // CONSTRUCTORS
     // ============================================================
 
-    pub fn new(seed: u64, master_key: &[u8; 32]) -> Self {
+    /// JALUR SINKRON: `session_key` = kunci hasil HKDF dari FCR-RSA.
+    pub fn from_session_key(seed: u64, session_key: [u8; 32]) -> Self {
         let mut session_id = [0u8; 8];
         session_id.copy_from_slice(&seed.to_be_bytes());
-
-        let crypto = CryptoSession::new(session_id, master_key, CURRENT_CRYPTO_VERSION);
-
-        Self {
-            crypto,
-            survival: SurvivalModeController::new(),
-            reassembler: Reassembler::new(),
-            anomaly: AnomalyDetector::new(),
-            spacetime: SpacetimeValidator::new(session_id),
-            hopper: FibonacciHopper::new(seed),
-            session_id,
-            seed,
-        }
+        let crypto = CryptoSession::from_session_key(session_id, session_key, CURRENT_CRYPTO_VERSION);
+        Self { crypto, survival: SurvivalModeController::new(), reassembler: Reassembler::new(), anomaly: AnomalyDetector::new(), spacetime: SpacetimeValidator::new(session_id), hopper: FibonacciHopper::new(seed), session_id, seed }
     }
 
-    pub fn with_profile(seed: u64, master_key: &[u8; 32], profile: LinkProfile) -> Self {
-        let mut orch = Self::new(seed, master_key);
+    pub fn with_profile(seed: u64, session_key: [u8; 32], profile: LinkProfile) -> Self {
+        let mut orch = Self::from_session_key(seed, session_key);
         orch.anomaly = AnomalyDetector::with_profile(profile);
         orch
     }
@@ -99,6 +89,12 @@ impl TransportOrchestrator {
     /// port tersebut.
     pub fn expected_port(&self) -> u16 {
         self.hopper.peek_next_port()
+    }
+    /// Port hopper untuk MENGIRIM chunk berikutnya. Mengonsumsi satu langkah
+    /// hopper pengirim, supaya pengirim & penerima tetap sinkron:
+    /// penerima mengharapkan chunk ke-N datang dari port hopper ke-N.
+    pub fn next_send_port(&mut self) -> u16 {
+        self.hopper.next_port()
     }
 
     // ============================================================
@@ -148,17 +144,18 @@ impl TransportOrchestrator {
             return Err(ReassemblyError::InvalidChunk);
         }
 
-        // 4. Konsumsi port (setelah validasi sukses)
+        // 4-6 FIX: jangan konsumsi port / catat anomali sebelum reassembler sukses.
+        // Sebelumnya: port terkonsumsi & spacetime history tercatat walau push_chunk
+        // gagal (duplikat/timeout) -> pengirim & penerima desync permanen.
+        let data_len = data.len();
+        let forensic_timestamp = forensic.timestamp;
+        let result = self.reassembler.push_chunk(metadata, data, forensic);
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => { self.spacetime.pop_last(); return Err(e); }
+        };
         self.hopper.next_port();
-
-        // 5. Deteksi anomali
-        let anomaly_report = self.anomaly.record_chunk_at(
-            data.len(),
-            forensic.timestamp,
-        );
-
-        // 6. Push chunk
-        let result = self.reassembler.push_chunk(metadata, data, forensic)?;
+        let anomaly_report = self.anomaly.record_chunk_at(data_len, forensic_timestamp);
 
         // 7. Feedback loop
         if result.is_none() {
@@ -230,7 +227,7 @@ impl TransportOrchestrator {
 
 impl Default for TransportOrchestrator {
     fn default() -> Self {
-        Self::new(0xCAFEBABE, &[0xAA; 32])
+        Self::from_session_key(0xCAFEBABE, [0xAA; 32])
     }
 }
 
@@ -278,7 +275,7 @@ mod tests {
     }
 
     fn make_orchestrator() -> TransportOrchestrator {
-        TransportOrchestrator::new(TEST_SEED, &TEST_MASTER_KEY)
+        TransportOrchestrator::from_session_key(TEST_SEED, TEST_MASTER_KEY)
     }
 
     // ============================================================
@@ -574,7 +571,7 @@ mod tests {
     fn test_with_profile_constructor() {
         let orch = TransportOrchestrator::with_profile(
             TEST_SEED,
-            &TEST_MASTER_KEY,
+            TEST_MASTER_KEY,
             LinkProfile::Satellite,
         );
 

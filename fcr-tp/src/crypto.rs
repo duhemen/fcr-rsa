@@ -102,26 +102,13 @@ pub struct FcrTpSession {
 }
 
 impl FcrTpSession {
-    pub fn new(session_id: [u8; 8], master_key: &[u8; 32], crypto_version: u8) -> Self {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(master_key);
-        hasher.update(session_id);
-        let derived = hasher.finalize();
-        
-        let mut session_key = [0u8; 32];
-        session_key.copy_from_slice(&derived);
-        
+    /// JALUR SINKRON (produksi): kunci sesi SUDAH hasil HKDF dari FCR-RSA.
+    /// FCR-TP tidak menderivasi apa-apa di sini.
+    pub fn from_session_key(session_id: [u8; 8], session_key: [u8; 32], crypto_version: u8) -> Self {
         let max_chunk_payload_size = DEFAULT_BUCKET_SIZE.saturating_sub(FRAME_OVERHEAD);
-        
-        Self {
-            session_id,
-            crypto_version,
-            session_key,
-            current_epoch: 0,
-            max_chunk_payload_size,
-        }
+        Self { session_id, crypto_version, session_key, current_epoch: 0, max_chunk_payload_size }
     }
+
 
     pub fn max_payload_for_bucket(bucket_size: usize) -> Result<usize, &'static str> {
         bucket_size
@@ -363,7 +350,7 @@ mod tests {
     // ============================================================
 
     fn make_session() -> FcrTpSession {
-        FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0xAA; 32], CURRENT_CRYPTO_VERSION)
+        FcrTpSession::from_session_key([1, 2, 3, 4, 5, 6, 7, 8], [0xAA; 32], CURRENT_CRYPTO_VERSION)
     }
 
     // ============================================================
@@ -613,8 +600,8 @@ mod tests {
 
     #[test]
     fn test_reject_wrong_session_key() {
-        let session1 = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0xEE; 32], CURRENT_CRYPTO_VERSION);
-        let session2 = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0xFF; 32], CURRENT_CRYPTO_VERSION);
+        let session1 = FcrTpSession::from_session_key([1, 2, 3, 4, 5, 6, 7, 8], [0xEE; 32], CURRENT_CRYPTO_VERSION);
+        let session2 = FcrTpSession::from_session_key([1, 2, 3, 4, 5, 6, 7, 8], [0xFF; 32], CURRENT_CRYPTO_VERSION);
 
         let frames = session1.encrypt_to_frames(b"Data Rahasia").expect("Encrypt gagal");
         assert!(session2.decrypt_from_frame(&frames[0]).is_err());
@@ -653,8 +640,8 @@ mod tests {
 
     #[test]
     fn test_reject_replay_across_sessions() {
-        let session_a = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x33; 32], CURRENT_CRYPTO_VERSION);
-        let session_b = FcrTpSession::new([9, 10, 11, 12, 13, 14, 15, 16], &[0x33; 32], CURRENT_CRYPTO_VERSION);
+        let session_a = FcrTpSession::from_session_key([1, 2, 3, 4, 5, 6, 7, 8], [0x33; 32], CURRENT_CRYPTO_VERSION);
+        let session_b = FcrTpSession::from_session_key([9, 10, 11, 12, 13, 14, 15, 16], [0x33; 32], CURRENT_CRYPTO_VERSION);
 
         let frames = session_a.encrypt_to_frames(b"Data Sesi A").expect("Encrypt gagal");
         assert!(session_a.decrypt_from_frame(&frames[0]).is_ok());
@@ -673,7 +660,7 @@ mod tests {
 
     #[test]
     fn test_aad_structure() {
-        let session = FcrTpSession::new([0xAA; 8], &[0x66; 32], CURRENT_CRYPTO_VERSION);
+        let session = FcrTpSession::from_session_key([0xAA; 8], [0x66; 32], CURRENT_CRYPTO_VERSION);
         let aad = session.build_aad();
         assert_eq!(&aad[0..8], &[0xAA; 8]);
         assert_eq!(&aad[8..16], &0u64.to_be_bytes());

@@ -31,7 +31,7 @@ use crate::anomaly::{
 pub const CANARY_THRESHOLD: u8 = 30;
 
 /// Ambang batas risiko untuk memutus koneksi (0-100)
-pub const DISCONNECT_THRESHOLD: u8 = 100;
+pub const DISCONNECT_THRESHOLD: u8 = 80; // FIX: sebelumnya 100 tidak pernah tercapai (maks riil 90: timing & size mutually exclusive)
 
 /// Maksimum token yang disimpan (sebelum di-clear per epoch)
 pub const MAX_SEEN_TOKENS: usize = 10_000;
@@ -70,6 +70,7 @@ impl TransportRiskScore {
     /// REVISI: sebelumnya timing_anomaly & size_anomaly berbobot 0,
     /// sehingga anomali timing/size tidak pernah mempengaruhi keputusan.
     pub fn calculate_total(&mut self) {
+        // Catatan: timing & size mutually exclusive (satu AnomalyReport), jadi maks riil = 40+40+20/10 = 90 bila bobot diubah, 80 saat ini sudah = token+port.
         let weighted: u32 = (self.token_reuse as u32 * WEIGHT_TOKEN_REUSE
             + self.port_violation as u32 * WEIGHT_PORT_VIOLATION
             + self.timing_anomaly as u32 * WEIGHT_TIMING_ANOMALY
@@ -1015,8 +1016,8 @@ mod tests {
 
     #[test]
     fn test_canary_frame_encrypted_and_valid() {
-        let master_key = [0xAA; 32];
-        let session = CryptoSession::new(TEST_SESSION, &master_key, CURRENT_CRYPTO_VERSION);
+        let session_key = [0xAA; 32]; // kunci hasil HKDF dari FCR-RSA
+        let session = CryptoSession::from_session_key(TEST_SESSION, session_key, CURRENT_CRYPTO_VERSION);
 
         let engine = DefenseEngine::new(TEST_SESSION);
         let trace_id = engine.generate_trace_id();

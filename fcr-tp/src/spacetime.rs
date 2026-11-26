@@ -149,6 +149,7 @@ impl SpacetimeValidator {
     pub fn history_len(&self) -> usize { self.history.len() }
     pub fn last_sample(&self) -> Option<&SpacetimeSample> { self.history.back() }
     pub fn reset(&mut self) { self.history.clear(); }
+    pub fn pop_last(&mut self) { self.history.pop_back(); }
     pub fn session_id(&self) -> [u8; 8] { self.session_id }
 }
 

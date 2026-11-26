@@ -19,6 +19,7 @@ pub mod reassembler;
 pub mod anomaly;
 pub mod spacetime;
 pub mod session;
+pub mod socket;
 
 // ============================================================
 // RE-EXPORTS: Tipe Utama
@@ -113,6 +114,7 @@ pub use hopper::FibonacciHopper;
 
 // --- Session layer (orchestrator) ---
 pub use session::TransportOrchestrator;
+pub use socket::{SocketConfig, UdpTransport};
 
 // ============================================================
 // DOKUMENTASI TAMBAHAN
@@ -148,9 +150,9 @@ mod tests {
     
     #[test]
     fn test_crypto_session_alias() {
-        let session = CryptoSession::new(
+        let session = CryptoSession::from_session_key(
             [1, 2, 3, 4, 5, 6, 7, 8],
-            &[0xAA; 32],
+            [0xAA; 32],
             CURRENT_CRYPTO_VERSION,
         );
         assert_eq!(session.crypto_version, CURRENT_CRYPTO_VERSION);
@@ -158,13 +160,13 @@ mod tests {
     
     #[test]
     fn test_transport_orchestrator_accessible() {
-        let orch = TransportOrchestrator::new(0xDEADBEEF, &[0xAA; 32]);
+        let orch = TransportOrchestrator::from_session_key(0xDEADBEEF, [0xAA; 32]);
         assert_eq!(orch.current_epoch(), 0);
     }
     
     #[test]
     fn test_full_roundtrip_via_orchestrator() {
-        let orch = TransportOrchestrator::new(0xDEADBEEF, &[0xAA; 32]);
+        let orch = TransportOrchestrator::from_session_key(0xDEADBEEF, [0xAA; 32]);
         let plaintext = b"Halo dari lib.rs";
         
         let frames = orch.encrypt(plaintext).expect("Encrypt gagal");
@@ -201,7 +203,7 @@ mod tests {
     #[test]
     fn test_defense_constants_accessible() {
         assert_eq!(CANARY_THRESHOLD, 30);
-        assert_eq!(DISCONNECT_THRESHOLD, 100);
+        assert_eq!(DISCONNECT_THRESHOLD, 80); // FIX: 100 tidak tercapai
         assert_eq!(FORENSIC_OVERHEAD, 48);
     }
     
