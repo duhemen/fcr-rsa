@@ -9,7 +9,12 @@ pub mod hopper;
 pub mod crypto;
 pub mod defense;
 pub mod survival;
+pub mod reassembler;
+pub mod anomaly;
+pub mod spacetime;
+pub mod session;
 
 // Ekspor tipe utama agar mudah diakses dari luar crate
 pub use packet::FcrTpFrame;
 pub use packet::HeaderMode;
+pub use reassembler::Reassembler;

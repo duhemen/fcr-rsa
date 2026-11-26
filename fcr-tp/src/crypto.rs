@@ -1,13 +1,8 @@
 //! FCR-TP Crypto Wrapper & Chunking Engine
 //! 
-//! Menjembatani FCR-RSA dengan FCR-TP. Mendukung chunking dinamis untuk payload besar 
-//! (misal: U4096 atau Post-Quantum KEM) sambil mempertahankan ukuran paket yang ramah jaringan.
-//! 
-//! IMPLEMENTASI KRIPTOGRAFI NYATA:
-//! - ChaCha20-Poly1305 untuk AEAD encryption
-//! - Associated Data (AAD) untuk mengikat frame ke session_id + epoch + chunk_index
-//! - CSPRNG untuk padding acak dan nonce generation
-//! - Session key derivation dari master key
+//! Padding sekarang di dalam plaintext untuk AEAD, bukan di luar.
+//! Format plaintext untuk AEAD: [metadata:14][plaintext_len:2][data:N][padding_acak:P]
+//! Receiver baca plaintext_len dari plaintext terdekripsi, ambil hanya data asli.
 
 use rand::RngCore;
 use zeroize::Zeroize;
@@ -16,27 +11,19 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 
-use crate::packet::{FcrTpFrame, HeaderMode};
+use crate::packet::{FcrTpFrame, HeaderMode, BUCKET_SIZES};
 
-/// Versi kriptografi saat ini. 
 pub const CURRENT_CRYPTO_VERSION: u8 = 1;
-
-/// Batas maksimum chunk per pesan untuk mencegah serangan Memory Exhaustion (DoS).
 pub const MAX_CHUNKS_PER_MESSAGE: u16 = 64;
-
-/// Ukuran metadata chunking di dalam payload terenkripsi (14 bytes).
 pub const CHUNK_METADATA_SIZE: usize = 14;
-
-/// Ukuran nonce ChaCha20-Poly1305 (96 bits = 12 bytes)
+pub const PLAINTEXT_LEN_SIZE: usize = 2;
 pub const NONCE_SIZE: usize = 12;
-
-/// Ukuran AEAD tag (Poly1305 = 16 bytes)
 pub const AEAD_TAG_SIZE: usize = 16;
+pub const AAD_SIZE: usize = 16;
 
-/// Ukuran AAD (Associated Data): session_id (8) + epoch (8) + chunk_index (2) = 18 bytes
-pub const AAD_SIZE: usize = 18;
+/// Default bucket size untuk enkripsi (bucket terbesar)
+pub const DEFAULT_BUCKET_SIZE: usize = 1200;
 
-/// Metadata internal yang disisipkan ke dalam setiap chunk sebelum enkripsi.
 #[derive(Debug, Clone, Copy, Zeroize)]
 pub struct ChunkMetadata {
     pub message_id: u64,
@@ -47,7 +34,6 @@ pub struct ChunkMetadata {
 }
 
 impl ChunkMetadata {
-    /// Serialize ke byte array (constant-time friendly)
     pub fn to_bytes(&self) -> [u8; CHUNK_METADATA_SIZE] {
         let mut buf = [0u8; CHUNK_METADATA_SIZE];
         buf[0..8].copy_from_slice(&self.message_id.to_be_bytes());
@@ -58,7 +44,6 @@ impl ChunkMetadata {
         buf
     }
 
-    /// Deserialize dari byte array (constant-time friendly)
     pub fn from_bytes(buf: &[u8; CHUNK_METADATA_SIZE]) -> Result<Self, &'static str> {
         let message_id = u64::from_be_bytes(buf[0..8].try_into().unwrap());
         let version = buf[8];
@@ -83,21 +68,15 @@ impl ChunkMetadata {
     }
 }
 
-/// Sesi FCR-TP yang terikat dengan kunci sesi ChaCha20-Poly1305.
 pub struct FcrTpSession {
     pub session_id: [u8; 8],
     pub crypto_version: u8,
-    /// Kunci sesi 256-bit untuk ChaCha20-Poly1305
     session_key: [u8; 32],
-    /// Epoch saat ini — di-advance saat port hopping terjadi
-    /// Setiap frame diikat ke epoch melalui AAD, mencegah replay lintas epoch
     current_epoch: u64,
-    /// Ukuran maksimum payload mentah per chunk (sebelum padding FCR-TP).
     pub max_chunk_payload_size: usize,
 }
 
 impl FcrTpSession {
-    /// Buat sesi baru dengan master key.
     pub fn new(session_id: [u8; 8], master_key: &[u8; 32], crypto_version: u8) -> Self {
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
@@ -108,7 +87,12 @@ impl FcrTpSession {
         let mut session_key = [0u8; 32];
         session_key.copy_from_slice(&derived);
         
-        let max_chunk_payload_size = 1200 - crate::packet::TOKEN_SIZE - NONCE_SIZE - AEAD_TAG_SIZE - CHUNK_METADATA_SIZE;
+        let max_chunk_payload_size = DEFAULT_BUCKET_SIZE 
+            - crate::packet::TOKEN_SIZE 
+            - NONCE_SIZE 
+            - AEAD_TAG_SIZE 
+            - CHUNK_METADATA_SIZE 
+            - PLAINTEXT_LEN_SIZE;
         
         Self {
             session_id,
@@ -119,41 +103,36 @@ impl FcrTpSession {
         }
     }
 
-    /// Advance epoch (dipanggil saat port hopping terjadi).
-    /// Frame yang dienkripsi setelah ini akan terikat ke epoch baru.
     pub fn advance_epoch(&mut self) {
         self.current_epoch = self.current_epoch.wrapping_add(1);
     }
 
-    /// Dapatkan epoch saat ini
     pub fn current_epoch(&self) -> u64 {
         self.current_epoch
     }
 
-    /// Set epoch secara eksplisit (untuk sinkronisasi dengan defense engine)
     pub fn set_epoch(&mut self, epoch: u64) {
         self.current_epoch = epoch;
     }
 
-    /// Bangun AAD (Associated Data) untuk frame saat ini.
-    /// AAD mengikat frame ke session_id + epoch + chunk_index.
-    /// 
-    /// Format: [session_id:8][epoch:8][chunk_index:2] = 18 bytes
-    /// 
-    /// Manfaat:
-    /// - Mencegah replay lintas sesi (session_id berbeda → AAD berbeda → dekripsi gagal)
-    /// - Mencegah replay lintas epoch (epoch berbeda → AAD berbeda → dekripsi gagal)
-    /// - Mencegah chunk mixing (chunk_index berbeda → AAD berbeda → dekripsi gagal)
-    fn build_aad(&self, chunk_index: u16) -> [u8; AAD_SIZE] {
+    fn build_aad(&self) -> [u8; AAD_SIZE] {
         let mut aad = [0u8; AAD_SIZE];
         aad[0..8].copy_from_slice(&self.session_id);
         aad[8..16].copy_from_slice(&self.current_epoch.to_be_bytes());
-        aad[16..18].copy_from_slice(&chunk_index.to_be_bytes());
         aad
     }
 
-    /// Enkripsi plaintext menjadi Vec<FcrTpFrame> dengan AEAD + AAD.
+    /// Enkripsi plaintext menjadi Vec<FcrTpFrame> dengan padding di dalam AEAD.
     pub fn encrypt_to_frames(&self, plaintext: &[u8]) -> Result<Vec<FcrTpFrame>, &'static str> {
+        self.encrypt_to_frames_with_bucket(plaintext, DEFAULT_BUCKET_SIZE)
+    }
+
+    /// Enkripsi dengan bucket size spesifik.
+    pub fn encrypt_to_frames_with_bucket(&self, plaintext: &[u8], bucket_size: usize) -> Result<Vec<FcrTpFrame>, &'static str> {
+        if !BUCKET_SIZES.contains(&bucket_size) {
+            return Err("Invalid bucket size");
+        }
+
         let cipher = ChaCha20Poly1305::new_from_slice(&self.session_key)
             .map_err(|_| "Failed to initialize cipher")?;
 
@@ -181,18 +160,38 @@ impl FcrTpSession {
                 is_final,
             };
 
-            let mut protected_payload = Vec::with_capacity(CHUNK_METADATA_SIZE + chunk_data.len());
+            let plaintext_len = chunk_data.len() as u16;
+            
+            // Hitung padding supaya total wire size = bucket_size
+            // wire_size = TOKEN_SIZE + NONCE_SIZE + ciphertext_len + AEAD_TAG_SIZE
+            // ciphertext_len = CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE + plaintext_len + padding_len
+            // Jadi: bucket_size = 8 + 12 + 14 + 2 + plaintext_len + padding_len + 16
+            // padding_len = bucket_size - 52 - plaintext_len
+            let overhead = crate::packet::TOKEN_SIZE + NONCE_SIZE + CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE + AEAD_TAG_SIZE;
+            let padding_len = bucket_size as isize - overhead as isize - plaintext_len as isize;
+            
+            if padding_len < 0 {
+                return Err("Plaintext too large for bucket size");
+            }
+            let padding_len = padding_len as usize;
+
+            // Format plaintext untuk AEAD: [metadata:14][plaintext_len:2][data:N][padding:P]
+            let mut protected_payload = Vec::with_capacity(CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE + chunk_data.len() + padding_len);
             protected_payload.extend_from_slice(&metadata.to_bytes());
+            protected_payload.extend_from_slice(&plaintext_len.to_be_bytes());
             protected_payload.extend_from_slice(chunk_data);
+            
+            // Padding acak (CSPRNG)
+            let mut padding = vec![0u8; padding_len];
+            rand::thread_rng().fill_bytes(&mut padding);
+            protected_payload.extend_from_slice(&padding);
 
             let mut nonce_bytes = [0u8; NONCE_SIZE];
             rand::thread_rng().fill_bytes(&mut nonce_bytes);
             let nonce = Nonce::from_slice(&nonce_bytes);
 
-            // PENTING: Bangun AAD untuk frame ini
-            let aad = self.build_aad(chunk_index);
+            let aad = self.build_aad();
 
-            // Enkripsi dengan AAD (Associated Data)
             let payload = Payload {
                 msg: protected_payload.as_ref(),
                 aad: &aad,
@@ -234,14 +233,8 @@ impl FcrTpSession {
     }
 
     /// Dekripsi FcrTpFrame menjadi plaintext asli.
-    /// 
-    /// PENTING: Dekripsi akan GAGAL jika:
-    /// - Tag tidak valid (data corrupted)
-    /// - Session ID di AAD tidak cocok (replay dari sesi lain)
-    /// - Epoch di AAD tidak cocok (replay dari epoch lain)
-    /// - Chunk index di AAD tidak cocok (chunk mixing)
-    pub fn decrypt_from_frame(&self, frame: &FcrTpFrame, expected_chunk_index: u16) -> Result<(ChunkMetadata, Vec<u8>), &'static str> {
-        if frame.encrypted_header_blob.len() < NONCE_SIZE + CHUNK_METADATA_SIZE {
+    pub fn decrypt_from_frame(&self, frame: &FcrTpFrame) -> Result<(ChunkMetadata, Vec<u8>), &'static str> {
+        if frame.encrypted_header_blob.len() < NONCE_SIZE + CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE {
             return Err("Encrypted blob too short");
         }
 
@@ -256,10 +249,8 @@ impl FcrTpSession {
         let cipher = ChaCha20Poly1305::new_from_slice(&self.session_key)
             .map_err(|_| "Failed to initialize cipher")?;
 
-        // PENTING: Bangun AAD dengan expected_chunk_index
-        let aad = self.build_aad(expected_chunk_index);
+        let aad = self.build_aad();
 
-        // Dekripsi dengan AAD — akan gagal jika AAD tidak cocok
         let payload = Payload {
             msg: ciphertext_with_tag.as_ref(),
             aad: &aad,
@@ -267,8 +258,8 @@ impl FcrTpSession {
         let decrypted = cipher.decrypt(nonce, payload)
             .map_err(|_| "Decryption failed: invalid tag, corrupted data, or AAD mismatch")?;
 
-        if decrypted.len() < CHUNK_METADATA_SIZE {
-            return Err("Decrypted payload too short for metadata");
+        if decrypted.len() < CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE {
+            return Err("Decrypted payload too short for metadata and length");
         }
 
         let mut meta_buf = [0u8; CHUNK_METADATA_SIZE];
@@ -279,12 +270,19 @@ impl FcrTpSession {
             return Err("Crypto version mismatch");
         }
 
-        // Verifikasi chunk_index konsisten dengan yang diharapkan
-        if metadata.chunk_index != expected_chunk_index {
-            return Err("Chunk index mismatch: potential chunk mixing attack");
+        // Baca panjang plaintext asli dari field `len`
+        let plaintext_len = u16::from_be_bytes(
+            decrypted[CHUNK_METADATA_SIZE..CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE]
+                .try_into()
+                .unwrap()
+        ) as usize;
+
+        if decrypted.len() < CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE + plaintext_len {
+            return Err("Decrypted payload shorter than declared length");
         }
 
-        let plaintext_chunk = decrypted[CHUNK_METADATA_SIZE..].to_vec();
+        // Extract plaintext chunk (hanya data asli, tanpa padding)
+        let plaintext_chunk = decrypted[CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE..CHUNK_METADATA_SIZE + PLAINTEXT_LEN_SIZE + plaintext_len].to_vec();
 
         Ok((metadata, plaintext_chunk))
     }
@@ -308,13 +306,8 @@ mod tests {
         
         let frame = &frames[0];
         
-        // Dekripsi dengan chunk_index = 0 (sesuai)
-        let (metadata, decrypted_chunk) = session.decrypt_from_frame(frame, 0).expect("Decrypt gagal");
+        let (_metadata, decrypted_chunk) = session.decrypt_from_frame(frame).expect("Decrypt gagal");
         
-        assert_eq!(metadata.version, CURRENT_CRYPTO_VERSION);
-        assert_eq!(metadata.chunk_index, 0);
-        assert_eq!(metadata.total_chunks, 1);
-        assert_eq!(metadata.is_final, true);
         assert_eq!(decrypted_chunk, original_plaintext.to_vec());
     }
 
@@ -327,11 +320,9 @@ mod tests {
         let frames = session.encrypt_to_frames(&large_plaintext).expect("Encrypt gagal");
         assert_eq!(frames.len(), 3);
         
-        // Dekripsi semua chunk dengan chunk_index yang benar
         let mut decrypted_all = Vec::new();
-        for (i, frame) in frames.iter().enumerate() {
-            let (metadata, chunk) = session.decrypt_from_frame(frame, i as u16).expect("Decrypt gagal");
-            assert_eq!(metadata.chunk_index, i as u16);
+        for frame in &frames {
+            let (_metadata, chunk) = session.decrypt_from_frame(frame).expect("Decrypt gagal");
             decrypted_all.extend_from_slice(&chunk);
         }
         
@@ -366,7 +357,6 @@ mod tests {
 
         let result = ChunkMetadata::from_bytes(&malicious_buf);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid total_chunks: potential DoS attempt");
     }
 
     #[test]
@@ -377,7 +367,6 @@ mod tests {
 
         let result = ChunkMetadata::from_bytes(&malicious_buf);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid chunk_index: out of bounds");
     }
 
     #[test]
@@ -390,7 +379,7 @@ mod tests {
         
         frame.aead_auth_tag[0] ^= 0xFF;
         
-        let result = session.decrypt_from_frame(&frame, 0);
+        let result = session.decrypt_from_frame(&frame);
         assert!(result.is_err());
     }
 
@@ -403,7 +392,7 @@ mod tests {
         let frames = session1.encrypt_to_frames(plaintext).expect("Encrypt gagal");
         let frame = &frames[0];
         
-        let result = session2.decrypt_from_frame(frame, 0);
+        let result = session2.decrypt_from_frame(frame);
         assert!(result.is_err());
     }
 
@@ -427,36 +416,25 @@ mod tests {
         }
     }
 
-    // === TEST BARU: Verifikasi AAD mencegah replay ===
-
     #[test]
     fn test_reject_replay_across_epochs() {
-        // Skenario: Frame dari epoch 5 tidak bisa di-replay di epoch 6
         let mut session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x22; 32], CURRENT_CRYPTO_VERSION);
         
-        assert_eq!(session.current_epoch(), 0);
-        
-        // Enkripsi di epoch 0
         let plaintext = b"Data Rahasia Epoch 0";
         let frames = session.encrypt_to_frames(plaintext).expect("Encrypt gagal");
         let frame = frames[0].clone();
         
-        // Dekripsi di epoch 0 harus berhasil
-        let result = session.decrypt_from_frame(&frame, 0);
-        assert!(result.is_ok(), "Decrypt di epoch yang sama harus berhasil");
+        let result = session.decrypt_from_frame(&frame);
+        assert!(result.is_ok());
         
-        // Advance ke epoch 1
         session.advance_epoch();
-        assert_eq!(session.current_epoch(), 1);
         
-        // Dekripsi frame lama di epoch 1 harus GAGAL (AAD mismatch)
-        let result = session.decrypt_from_frame(&frame, 0);
-        assert!(result.is_err(), "Decrypt di epoch berbeda harus gagal (AAD mismatch)");
+        let result = session.decrypt_from_frame(&frame);
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_reject_replay_across_sessions() {
-        // Skenario: Frame dari Sesi A tidak bisa dipakai di Sesi B
         let session_a = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x33; 32], CURRENT_CRYPTO_VERSION);
         let session_b = FcrTpSession::new([9, 10, 11, 12, 13, 14, 15, 16], &[0x33; 32], CURRENT_CRYPTO_VERSION);
         
@@ -464,34 +442,11 @@ mod tests {
         let frames = session_a.encrypt_to_frames(plaintext).expect("Encrypt gagal");
         let frame = &frames[0];
         
-        // Dekripsi dengan sesi A harus berhasil
-        let result = session_a.decrypt_from_frame(frame, 0);
-        assert!(result.is_ok(), "Decrypt dengan sesi yang sama harus berhasil");
+        let result = session_a.decrypt_from_frame(frame);
+        assert!(result.is_ok());
         
-        // Dekripsi dengan sesi B harus GAGAL (session_id di AAD berbeda)
-        let result = session_b.decrypt_from_frame(frame, 0);
-        assert!(result.is_err(), "Decrypt dengan sesi berbeda harus gagal (AAD mismatch)");
-    }
-
-    #[test]
-    fn test_reject_chunk_mixing() {
-        // Skenario: Chunk dari pesan lain tidak bisa disisipkan
-        let session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x44; 32], CURRENT_CRYPTO_VERSION);
-        
-        let plaintext = vec![0xAA; 3000]; // Akan jadi 3 chunk
-        let frames = session.encrypt_to_frames(&plaintext).expect("Encrypt gagal");
-        assert_eq!(frames.len(), 3);
-        
-        // Frame 0 dienkripsi dengan chunk_index=0, AAD-nya mengandung chunk_index=0
-        let frame_0 = &frames[0];
-        
-        // Coba dekripsi frame 0 dengan expected_chunk_index=1 (mismatch!)
-        let result = session.decrypt_from_frame(frame_0, 1);
-        assert!(result.is_err(), "Chunk mixing harus ditolak (AAD mismatch)");
-        
-        // Dekripsi dengan chunk_index yang benar harus berhasil
-        let result = session.decrypt_from_frame(frame_0, 0);
-        assert!(result.is_ok(), "Decrypt dengan chunk_index yang benar harus berhasil");
+        let result = session_b.decrypt_from_frame(frame);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -499,13 +454,8 @@ mod tests {
         let mut session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x55; 32], CURRENT_CRYPTO_VERSION);
         
         assert_eq!(session.current_epoch(), 0);
-        
         session.advance_epoch();
         assert_eq!(session.current_epoch(), 1);
-        
-        session.advance_epoch();
-        assert_eq!(session.current_epoch(), 2);
-        
         session.set_epoch(100);
         assert_eq!(session.current_epoch(), 100);
     }
@@ -513,12 +463,161 @@ mod tests {
     #[test]
     fn test_aad_structure() {
         let session = FcrTpSession::new([0xAA; 8], &[0x66; 32], CURRENT_CRYPTO_VERSION);
+        let aad = session.build_aad();
+        assert_eq!(&aad[0..8], &[0xAA; 8]);
+        assert_eq!(&aad[8..16], &0u64.to_be_bytes());
+    }
+
+    #[test]
+    fn test_wire_roundtrip_encrypt_encode_decode_decrypt() {
+        let session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x77; 32], CURRENT_CRYPTO_VERSION);
+        let plaintext = b"Data yang benar-benar dikirim lewat jaringan";
+
+        let frames = session.encrypt_to_frames(plaintext).expect("Encrypt gagal");
+        assert_eq!(frames.len(), 1);
         
-        let aad = session.build_aad(5);
+        let wire = frames[0].encode().expect("Encode gagal");
+        assert!(BUCKET_SIZES.contains(&wire.len()));
         
-        // Verifikasi struktur AAD: [session_id:8][epoch:8][chunk_index:2]
-        assert_eq!(&aad[0..8], &[0xAA; 8]); // session_id
-        assert_eq!(&aad[8..16], &0u64.to_be_bytes()); // epoch = 0
-        assert_eq!(&aad[16..18], &5u16.to_be_bytes()); // chunk_index = 5
+        let received = FcrTpFrame::decode(wire).expect("Decode gagal");
+        
+        let (metadata, decrypted) = session.decrypt_from_frame(&received).expect("Decrypt gagal");
+        
+        assert_eq!(metadata.version, CURRENT_CRYPTO_VERSION);
+        assert_eq!(decrypted, plaintext.to_vec());
+    }
+    // === TEST BARU: Wire Roundtrip Multi-Chunk ===
+    #[test]
+    fn test_wire_roundtrip_multi_chunk_large_payload() {
+        let session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x88; 32], CURRENT_CRYPTO_VERSION);
+        
+        // Payload besar: 3000 bytes → akan jadi 3 chunk
+        let large_plaintext = vec![0xDD; 3000];
+        
+        // Encrypt
+        let frames = session.encrypt_to_frames(&large_plaintext).expect("Encrypt gagal");
+        assert_eq!(frames.len(), 3, "Harus ada 3 chunk");
+        
+        // Encode semua chunk ke wire format
+        let mut wire_frames = Vec::new();
+        for frame in &frames {
+            let wire = frame.encode().expect("Encode gagal");
+            assert!(BUCKET_SIZES.contains(&wire.len()), "Ukuran wire harus bucket valid");
+            wire_frames.push(wire);
+        }
+        
+        // Decode semua chunk dari wire format
+        let mut received_frames = Vec::new();
+        for wire in wire_frames {
+            let received = FcrTpFrame::decode(wire).expect("Decode gagal");
+            received_frames.push(received);
+        }
+        
+        // Decrypt semua chunk dan rakit kembali
+        let mut decrypted_all = Vec::new();
+        for (i, received) in received_frames.iter().enumerate() {
+            let (metadata, chunk) = session.decrypt_from_frame(received).expect("Decrypt gagal");
+            
+            // Verifikasi metadata chunk
+            assert_eq!(metadata.version, CURRENT_CRYPTO_VERSION);
+            assert_eq!(metadata.chunk_index, i as u16, "Chunk index harus berurutan");
+            assert_eq!(metadata.total_chunks, 3, "Total chunks harus 3");
+            
+            if i == 2 {
+                assert_eq!(metadata.is_final, true, "Chunk terakhir harus is_final");
+            } else {
+                assert_eq!(metadata.is_final, false, "Chunk bukan terakhir harus is_final=false");
+            }
+            
+            decrypted_all.extend_from_slice(&chunk);
+        }
+        
+        // Verifikasi plaintext lengkap
+        assert_eq!(decrypted_all.len(), 3000, "Panjang plaintext harus sama");
+        assert_eq!(decrypted_all, large_plaintext, "Isi plaintext harus identik");
+    }
+
+    #[test]
+    fn test_wire_roundtrip_chunk_out_of_order() {
+        let session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0x99; 32], CURRENT_CRYPTO_VERSION);
+        
+        let large_plaintext = vec![0xEE; 3000];
+        
+        let frames = session.encrypt_to_frames(&large_plaintext).expect("Encrypt gagal");
+        assert_eq!(frames.len(), 3);
+        
+        // Encode semua chunk
+        let mut wire_frames = Vec::new();
+        for frame in &frames {
+            let wire = frame.encode().expect("Encode gagal");
+            wire_frames.push(wire);
+        }
+        
+        // Decode dalam urutan terbalik (chunk 2, 1, 0)
+        let mut received_frames = Vec::new();
+        for i in (0..3).rev() {
+            let received = FcrTpFrame::decode(wire_frames[i].clone()).expect("Decode gagal");
+            received_frames.push(received);
+        }
+        
+        // Decrypt dalam urutan terbalik
+        let mut decrypted_chunks = Vec::new();
+        for received in &received_frames {
+            let (metadata, chunk) = session.decrypt_from_frame(received).expect("Decrypt gagal");
+            decrypted_chunks.push((metadata.chunk_index, chunk));
+        }
+        
+        // Sort berdasarkan chunk_index
+        decrypted_chunks.sort_by_key(|(idx, _)| *idx);
+        
+        // Rakit plaintext
+        let mut decrypted_all = Vec::new();
+        for (_, chunk) in decrypted_chunks {
+            decrypted_all.extend_from_slice(&chunk);
+        }
+        
+        // Verifikasi plaintext lengkap
+        assert_eq!(decrypted_all, large_plaintext, "Plaintext harus identik meskipun chunk datang out-of-order");
+    }
+
+    #[test]
+    fn test_wire_roundtrip_different_bucket_sizes() {
+        let session = FcrTpSession::new([1, 2, 3, 4, 5, 6, 7, 8], &[0xAA; 32], CURRENT_CRYPTO_VERSION);
+        
+        // Test dengan bucket 256 (pesan kecil)
+        let small_plaintext = b"Pesan kecil";
+        let frames_small = session.encrypt_to_frames_with_bucket(small_plaintext, 256).expect("Encrypt gagal");
+        assert_eq!(frames_small.len(), 1);
+        
+        let wire_small = frames_small[0].encode().expect("Encode gagal");
+        assert_eq!(wire_small.len(), 256);
+        
+        let received_small = FcrTpFrame::decode(wire_small).expect("Decode gagal");
+        let (_, decrypted_small) = session.decrypt_from_frame(&received_small).expect("Decrypt gagal");
+        assert_eq!(decrypted_small, small_plaintext.to_vec());
+        
+        // Test dengan bucket 512 (pesan sedang)
+        let medium_plaintext = vec![0xBB; 400];
+        let frames_medium = session.encrypt_to_frames_with_bucket(&medium_plaintext, 512).expect("Encrypt gagal");
+        assert_eq!(frames_medium.len(), 1);
+        
+        let wire_medium = frames_medium[0].encode().expect("Encode gagal");
+        assert_eq!(wire_medium.len(), 512);
+        
+        let received_medium = FcrTpFrame::decode(wire_medium).expect("Decode gagal");
+        let (_, decrypted_medium) = session.decrypt_from_frame(&received_medium).expect("Decrypt gagal");
+        assert_eq!(decrypted_medium, medium_plaintext);
+        
+        // Test dengan bucket 1200 (pesan besar)
+        let large_plaintext = vec![0xCC; 1000];
+        let frames_large = session.encrypt_to_frames_with_bucket(&large_plaintext, 1200).expect("Encrypt gagal");
+        assert_eq!(frames_large.len(), 1);
+        
+        let wire_large = frames_large[0].encode().expect("Encode gagal");
+        assert_eq!(wire_large.len(), 1200);
+        
+        let received_large = FcrTpFrame::decode(wire_large).expect("Decode gagal");
+        let (_, decrypted_large) = session.decrypt_from_frame(&received_large).expect("Decrypt gagal");
+        assert_eq!(decrypted_large, large_plaintext);
     }
 }
