@@ -30,6 +30,49 @@ fn build_hkdf_info(tier: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 
 // ============================================================
+// 0b. Derivasi kunci sesi untuk FCR-TP (dipakai bersama oleh
+//     enkripsi FCR-RSA dan transport). Perilaku HKDF-nya IDENTIK
+//     dengan yang dipakai encrypt/decrypt di bawah.
+// ============================================================
+
+/// Session seed deterministik dari sebuah secret bersama.
+/// SAMA PERSIS dengan cabang `blinding_override` di encrypt_hybrid_kem.
+pub fn session_seed_from_secret(secret: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fcr-session-seed:");
+    hasher.update(secret.as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&hasher.finalize()[..32]);
+    out
+}
+
+/// Kunci sesi 32 byte dari session seed + tier.
+pub fn derive_session_key(
+    session_seed_bytes: &[u8],
+    tier: &str,
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let hkdf_info = build_hkdf_info(tier)?;
+    derive_session_key_from_info(session_seed_bytes, &hkdf_info)
+}
+
+/// Versi internal: dipakai encrypt/decrypt yang sudah memegang hkdf_info.
+fn derive_session_key_from_info(
+    session_seed_bytes: &[u8],
+    hkdf_info: &[u8],
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let hk = Hkdf::<Sha256>::new(None, session_seed_bytes);
+    let mut out = [0u8; 32];
+    hk.expand(hkdf_info, &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Seed hopper (u64) dari 8 byte pertama session seed.
+/// Kedua pihak mendapat urutan port yang sama karena seed-nya sama.
+pub fn derive_hopper_seed(session_seed_bytes: &[u8]) -> u64 {
+    u64::from_be_bytes(session_seed_bytes[..8].try_into().unwrap())
+}
+
+// ============================================================
 // 1. Wrapper Kompatibilitas
 // ============================================================
 
@@ -88,10 +131,7 @@ pub fn encrypt_hybrid_kem(
     // 1. Session seed: Deterministik jika ada override, Acak jika tidak
     let mut session_seed_bytes = [0u8; 32];
     if let Some(override_str) = blinding_override {
-        let mut hasher = Sha256::new();
-        hasher.update(b"fcr-session-seed:");
-        hasher.update(override_str.as_bytes());
-        session_seed_bytes.copy_from_slice(&hasher.finalize()[..32]);
+        session_seed_bytes = session_seed_from_secret(override_str);
     } else {
         rand::rngs::OsRng.fill_bytes(&mut session_seed_bytes);
     }
@@ -116,9 +156,7 @@ pub fn encrypt_hybrid_kem(
     let encrypted_seed = encrypt_with_blinding_ct(&seed_bigint, &key_pair.e_vec, &blinding);
 
     // 6. Turunkan kunci sesi 256-bit dari session seed + TIER CONTEXT menggunakan HKDF
-    let hk = Hkdf::<Sha256>::new(None, &session_seed_bytes);
-    let mut session_key_bytes = [0u8; 32];
-    hk.expand(hkdf_info, &mut session_key_bytes).map_err(|e| e.to_string())?;
+    let session_key_bytes = derive_session_key_from_info(&session_seed_bytes, hkdf_info)?;
 
     // 7. AEAD Nonce: Deterministik jika ada override, Acak jika tidak
     let mut aead_nonce = [0u8; 12];
@@ -180,9 +218,7 @@ pub fn decrypt_hybrid_kem(
     };
 
     // 7. Turunkan kunci sesi 256-bit dengan TIER CONTEXT yang wajib cocok
-    let hk = Hkdf::<Sha256>::new(None, session_seed_bytes);
-    let mut session_key_bytes = [0u8; 32];
-    hk.expand(hkdf_info, &mut session_key_bytes).map_err(|e| e.to_string())?;
+    let session_key_bytes = derive_session_key_from_info(session_seed_bytes, hkdf_info)?;
 
     // 8. Dekripsi data dengan ChaCha20-Poly1305
     let cipher = ChaCha20Poly1305::new_from_slice(&session_key_bytes).map_err(|e| e.to_string())?;

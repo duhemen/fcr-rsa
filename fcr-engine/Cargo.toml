@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Link ke core library yang sudah di-hardening (v0.6.0)
 fcr-core-rust = { path = "../fcr-core-rust" }
+fcr-tp = { path = "../fcr-tp" }
 
 # CLI & Async Runtime
 clap = { version = "4.4", features = ["derive"] }

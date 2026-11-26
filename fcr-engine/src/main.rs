@@ -9,6 +9,7 @@ mod api;
 mod cli;
 mod crypto;
 mod db;
+mod transport;
 
 use clap::Parser;
 use cli::{ApikeyAction, Cli, Commands};
@@ -192,6 +193,33 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
+                // ===== FCR-TP transport =====
+        Commands::TpSend {
+            peer,
+            text,
+            secret,
+            tier,
+            bind,
+        } => match transport::run_send(&bind, peer, &secret, &tier, &text) {
+            Ok(n) => println!("Terkirim {} frame FCR-TP ke {}", n, peer),
+            Err(e) => {
+                eprintln!("Gagal kirim FCR-TP: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
+        Commands::TpListen {
+            bind,
+            secret,
+            tier,
+            count,
+        } => match transport::run_listen(&bind, &secret, &tier, count) {
+            Ok(()) => println!("Selesai mendengarkan."),
+            Err(e) => {
+                eprintln!("Gagal listen FCR-TP: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
     }
 
     ExitCode::SUCCESS

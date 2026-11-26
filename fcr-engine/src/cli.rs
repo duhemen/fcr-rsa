@@ -1,6 +1,7 @@
 //! CLI definition (Clap) — dipisah dari main.rs agar rapi.
 
 use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
 
 #[derive(Parser)]
 #[command(name = "fcr-engine")]
@@ -66,6 +67,40 @@ pub enum Commands {
         /// Port server (default 8080, override via env FCR_PORT)
         #[arg(short, long)]
         port: Option<u16>,
+    },
+    /// Kirim satu pesan teks ke peer lewat FCR-TP (UDP + port hopping)
+    TpSend {
+        /// Alamat peer, mis. 127.0.0.1:50000
+        #[arg(long)]
+        peer: SocketAddr,
+        /// Teks yang dikirim
+        #[arg(short = 'm', long)]
+        text: String,
+        /// Secret sesi bersama (HARUS sama di kedua pihak)
+        #[arg(short = 's', long)]
+        secret: String,
+        /// Tier: a atau b (harus sama di kedua pihak)
+        #[arg(short = 't', long, default_value = "b")]
+        tier: String,
+        /// Alamat bind lokal (default: port acak)
+        #[arg(long, default_value = "0.0.0.0:0")]
+        bind: String,
+    },
+
+    /// Dengarkan pesan masuk lewat FCR-TP
+    TpListen {
+        /// Alamat bind lokal, mis. 0.0.0.0:50000
+        #[arg(long, default_value = "0.0.0.0:50000")]
+        bind: String,
+        /// Secret sesi bersama (HARUS sama di kedua pihak)
+        #[arg(short = 's', long)]
+        secret: String,
+        /// Tier: a atau b (harus sama di kedua pihak)
+        #[arg(short = 't', long, default_value = "b")]
+        tier: String,
+        /// Berapa pesan lengkap yang ditunggu sebelum berhenti
+        #[arg(long, default_value_t = 1)]
+        count: usize,
     },
 }
 
