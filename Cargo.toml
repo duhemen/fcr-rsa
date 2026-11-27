@@ -1,0 +1,10 @@
+# Workspace FCR-RSA: satu keluarga, satu perintah tes.
+# Sebelum ini: 3 crate nongkrong sendiri-sendiri, harus cd satu-satu.
+# Sesudah ini: dari root, `cargo test --workspace` ngetes semuanya.
+[workspace]
+members = [
+    "fcr-engine",
+    "fcr-tp",
+    "fcr-core-rust",
+]
+resolver = "2"
