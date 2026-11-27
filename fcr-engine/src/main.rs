@@ -114,6 +114,75 @@ async fn main() -> ExitCode {
             }
         },
 
+        Commands::TpKeyPub { keyseed } => {
+            use fcr_core_rust::fib::{export_public_key, generate_key_pair};
+            match generate_key_pair(keyseed.as_bytes()) {
+                Ok(pair) => {
+                    let pubkey = export_public_key(&pair);
+                    println!("PUBKEY: {}", pubkey);
+                    println!("Simpan PUBKEY ini, bagikan ke pengirim. JANGAN bagikan keyseed.");
+                    return ExitCode::SUCCESS;
+                }
+                Err(e) => {
+                    eprintln!("Gagal buat kunci publik: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
+        Commands::TpHsSendPub {
+            peer,
+            text,
+            pubkey,
+            tier,
+            bind,
+            offered,
+        } => match transport::run_handshake_send_pub(bind, *peer, pubkey, tier, text, offered) {
+            Ok(n) => {
+                println!("Handshake pub + kirim selesai, {} frame.", n);
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal handshake-send-pub: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
+        Commands::TpHsListenPriv {
+            bind,
+            keyseed,
+            tier,
+            count,
+            offered,
+        } => match transport::run_handshake_listen_priv(bind, keyseed, tier, *count, offered) {
+            Ok(()) => {
+                println!("Selesai mendengarkan handshake privat.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal handshake-listen-priv: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
+        Commands::TpHsReplay {
+            peer,
+            text,
+            keyseed,
+            tier,
+            bind,
+            offered,
+        } => match transport::run_handshake_replay(bind, *peer, keyseed, tier, text, offered) {
+            Ok(()) => {
+                println!("Uji replay selesai: TERBUKTI ditolak.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal uji replay: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
         // Semua perintah lain BUTUH database -> lanjut ke bawah.
         _ => {}
     }
@@ -290,28 +359,15 @@ async fn main() -> ExitCode {
         // Sudah ditangani di atas, sebelum DB. Arm ini tidak akan
         // tercapai karena kita sudah return lebih awal.
         // Tetap ada agar match exhaustive.
-        Commands::TpSend { .. } | Commands::TpListen { .. } => {
-            unreachable!("transport sudah ditangani sebelum koneksi DB")
-        }
-        Commands::TpHsSend { .. } | Commands::TpHsListen { .. } => {
-            unreachable!("handshake sudah ditangani sebelum koneksi DB")
-        }
-        Commands::TpHsReplay {
-            peer,
-            text,
-            keyseed,
-            tier,
-            bind,
-            offered,
-        } => match transport::run_handshake_replay(&bind, peer, &keyseed, &tier, &text, &offered) {
-            Ok(()) => {
-                println!("Uji replay selesai: TERBUKTI ditolak.");
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Gagal uji replay: {}", e);
-                return ExitCode::FAILURE;
-            }
+        Commands::TpSend { .. }
+        | Commands::TpListen { .. }
+        | Commands::TpHsSend { .. }
+        | Commands::TpHsListen { .. }
+        | Commands::TpHsSendPub { .. }
+        | Commands::TpHsListenPriv { .. }
+        | Commands::TpKeyPub { .. }
+        | Commands::TpHsReplay { .. } => {
+            unreachable!("transport / handshake sudah ditangani sebelum koneksi DB")
         }
     }
 

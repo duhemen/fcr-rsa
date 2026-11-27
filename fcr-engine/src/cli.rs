@@ -130,6 +130,39 @@ pub enum Commands {
         #[arg(long, default_value = "v1-U2048,v2-U4096")]
         offered: String,
     },
+    /// Ekspor kunci publik dari keyseed, tanpa bocorkan privat
+    TpKeyPub {
+        #[arg(long)]
+        keyseed: String,
+    },
+    /// Handshake kirim pakai PUBLIK saja, tanpa keyseed privat
+    TpHsSendPub {
+        #[arg(long)]
+        peer: SocketAddr,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        pubkey: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value = "0.0.0.0:0")]
+        bind: String,
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
+    /// Handshake terima pakai PRIVAT saja (keyseed)
+    TpHsListenPriv {
+        #[arg(long, default_value = "0.0.0.0:50000")]
+        bind: String,
+        #[arg(long)]
+        keyseed: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value_t = 1)]
+        count: usize,
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

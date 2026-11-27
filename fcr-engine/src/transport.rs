@@ -26,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fcr_tp::{SocketConfig, UdpTransport};
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{decrypt_text, derive_hopper_seed, derive_session_key, encrypt_text, session_seed_from_secret};
+use crate::crypto::{decrypt_hybrid_kem, decrypt_text, derive_hopper_seed, derive_session_key, encrypt_hybrid_kem, encrypt_text, session_seed_from_secret};
 use crate::db::KeyRecord;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -226,8 +226,8 @@ impl HandshakeHello {
 /// Pakai encrypt_text / decrypt_text yang di dalamnya
 /// sudah ada encrypt_hybrid_kem / decrypt_hybrid_kem asli.
 /// memakai KeyRecord terpisah (publik / privat).
-/// Alasan masih simulasi: KeyRecord terpisah belum ada di db.rs,
-/// dan kita tidak mau mengubah db.rs di langkah ini.
+/// Prioritas 2b sudah asli: encrypt_hybrid_kem / decrypt_hybrid_kem.
+/// Prioritas 2c: split pub/priv via kem_seal_pub / kem_open_priv.
 /// Yang TIDAK simulasi: format hello, nonce, timestamp, canary,
 /// negosiasi parameter, risk score, trace_id, anti-replay.
 fn key_record_from_keyseed(keyseed: &str) -> KeyRecord {
@@ -252,6 +252,35 @@ fn kem_open(keyseed: &str, ciphertext: &str, tier: &str) -> Option<String> {
     // Bukan base64 lagi, jangan di-decode lagi.
     let key = key_record_from_keyseed(keyseed);
     decrypt_text(ciphertext, &key, tier, None).ok()
+}
+
+fn hkdf_info_for(tier: &str) -> Vec<u8> {
+    // Tiruan persis build_hkdf_info di crypto.rs (fungsi itu private).
+    // Format ini mengikat tier ke kunci sesi, jangan diubah.
+    format!("fcr-rsa-session-key-v1:tier-{}", tier.trim().to_lowercase()).into_bytes()
+}
+
+/// KEM split 2b: pengirim hanya pegang PUBLIK.
+/// Blinding diturunkan dari e_vec bytes (publik), bukan dari master_seed privat.
+/// Penerima menurunkan blinding yang sama dari e_vec-nya sendiri, jadi sinkron.
+fn kem_seal_pub(pubkey: &str, plaintext_hex: &str, tier: &str) -> Result<String, String> {
+    use fcr_core_rust::fib::keypair_from_public;
+    // JANGAN telan error: tampilkan persis penyebabnya.
+    let pair = keypair_from_public(pubkey).map_err(|e| format!("keypair_from_public gagal: {}", e))?;
+    let e_vec_bytes = pair.e_vec.to_be_bytes();
+    let hkdf_info = hkdf_info_for(tier);
+    encrypt_hybrid_kem(plaintext_hex, &pair, &e_vec_bytes, None, &hkdf_info)
+        .map_err(|e| format!("encrypt_hybrid_kem gagal: {}", e))
+}
+
+/// KEM split 2b: penerima hanya pegang PRIVAT (keyseed).
+/// Blinding diturunkan dari e_vec bytes yang sama, jadi sinkron dengan pengirim.
+fn kem_open_priv(keyseed_priv: &str, ciphertext: &str, tier: &str) -> Option<String> {
+    use fcr_core_rust::fib::generate_key_pair;
+    let pair = generate_key_pair(keyseed_priv.as_bytes()).ok()?;
+    let e_vec_bytes = pair.e_vec.to_be_bytes();
+    let hkdf_info = hkdf_info_for(tier);
+    decrypt_hybrid_kem(ciphertext, &pair, &e_vec_bytes, &hkdf_info).ok()
 }
 
 fn random_hex(n_bytes: usize) -> String {
@@ -283,6 +312,105 @@ pub fn run_handshake_send(
     // 2. Bungkus seed asli + canary pill lewat KEM.
     let envelope = kem_seal(keyseed, &format!("{}:{}", tp_seed_hex, client_nonce), tier);
     let canary = kem_seal(keyseed, &format!("{}:{}", canary_seed_hex, canary_id), tier);
+    let envelope_b64 = general_purpose::STANDARD.encode(envelope);
+    let canary_b64 = general_purpose::STANDARD.encode(canary);
+
+    let hello = HandshakeHello {
+        envelope_b64,
+        canary_b64,
+        canary_id: canary_id.clone(),
+        client_nonce_hex: client_nonce.clone(),
+        timestamp: now_unix(),
+        tier: tier.to_string(),
+        offered: offered.clone(),
+    };
+    let hello_str = hello.encode();
+
+    // 3. Kirim hello lewat transport yang sudah terikat ke seed SEMENTARA.
+    //    Setelah handshake lolos, kita bangun transport baru dengan tp_seed asli.
+    //    Untuk prototipe ini, hello + data dikirim lewat 2 transport yang sama-sama
+    //    memakai tp_seed, supaya penerima bisa dekripsi dengan kunci yang benar.
+        // HELLO lewat socket mentah, bukan lewat UdpTransport.
+    // Alasan: HELLO sudah terbungkus KEM + HMAC sendiri.
+    // Kalau lewat UdpTransport, dia dienkripsi 2x dan penerima mentah tidak bisa baca.
+    let raw_sock = std::net::UdpSocket::bind(bind)?;
+    raw_sock.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    let sent_hello = raw_sock
+        .send_to(format!("HELLO:{}", hello_str).as_bytes(), peer)
+        .map_err(|e| format!("kirim hello gagal: {}", e))?;
+    println!(
+        "[HS] Hello terkirim (trace canary: {}), menunggu bukti ServerHello...",
+        canary_id
+    );
+
+    // 4. Tunggu ServerHello: bukti client_nonce yang dikembalikan.
+    // PROOF juga lewat socket mentah.
+    let mut proof_buf = vec![0u8; 8192];
+    let (proof_len, _) = raw_sock
+        .recv_from(&mut proof_buf)
+        .map_err(|e| format!("tunggu ServerHello gagal: {}", e))?;
+    let reply = String::from_utf8_lossy(&proof_buf[..proof_len]).to_string();
+    if !reply.starts_with("PROOF:") {
+        // Kalau yang kembali adalah Poisoned Pill, berarti kita ditandai sebagai penyerang.
+        // Ini sesuai rel: balas dengan ciphertext valid berisi trace_id.
+        return Err(format!("ServerHello ditolak / Poisoned Pill: {}", reply).into());
+    }
+    let proof = reply.trim_start_matches("PROOF:").to_string();
+    // Format proof: chosen_params|server_nonce|client_nonce_kembali|trace_id
+    let proof_parts: Vec<&str> = proof.split('|').collect();
+    if proof_parts.len() != 4 {
+        return Err("format ServerHello tidak sah".into());
+    }
+    let chosen = proof_parts[0];
+    let client_nonce_back = proof_parts[2];
+    if client_nonce_back != client_nonce {
+        return Err("MITM: client_nonce yang kembali tidak cocok, handshake dibatalkan".into());
+    }
+    println!("[HS] ServerHello sah. Parameter dipilih: {}. Nonce cocok.", chosen);
+    println!("[HS] trace_id sesi: {}", proof_parts[3]);
+
+    // 5. Kirim data asli, hanya setelah bukti sah.
+    // Tutup socket mentah dulu, supaya port bebas untuk transport DATA.
+    // Kalau tidak, bind kedua ke port yang sama gagal AddrInUse di Windows.
+    drop(raw_sock);
+    let seed_bytes = hex::decode(&tp_seed_hex)?;
+    let seed_arr: [u8; 32] = seed_bytes.try_into().map_err(|_| "tp_seed bukan 32 byte")?;
+    let session_key = derive_session_key(&seed_arr, tier)?;
+    let hopper_seed = derive_hopper_seed(&seed_arr);
+    let mut transport = UdpTransport::bind(bind, hopper_seed, session_key, SocketConfig::default())?;
+    let sent = transport
+        .send_payload(peer, format!("DATA:{}", text).as_bytes())
+        .map_err(|e| format!("kirim data gagal: {}", e))?;
+    println!("[HS] Data terkirim setelah handshake sah.");
+    Ok(sent_hello + sent)
+}
+
+pub fn run_handshake_send_pub(
+    bind: &str,
+    peer: SocketAddr,
+    pubkey: &str,
+    tier: &str,
+    text: &str,
+    offered_str: &str,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let offered = parse_offered(offered_str);
+    if offered.is_empty() {
+        return Err("offered kosong: isi minimal v1-U2048".into());
+    }
+    // 1. Seed sesi acak, hanya untuk sesi ini. Everlasting: tidak pernah dipakai ulang.
+    let tp_seed_hex = random_hex(32);
+    let client_nonce = random_hex(16);
+    let canary_id = format!("canary-{}", random_hex(8));
+    let canary_seed_hex = random_hex(32);
+
+    // 2. Bungkus seed asli + canary pill lewat KEM.
+    let envelope = kem_seal_pub(pubkey, &format!("{}:{}", tp_seed_hex, client_nonce), tier)
+        .map_err(|e| format!("kem_seal_pub envelope gagal: {} | pubkey_len={} (harus 512 setelah prefix)", e, pubkey.trim().strip_prefix("fcr-pub-v1:").map(|h| h.len()).unwrap_or(0)))?;
+    let canary = kem_seal_pub(pubkey, &format!("{}:{}", canary_seed_hex, canary_id), tier)
+        .map_err(|e| format!("kem_seal_pub canary gagal: {}", e))?;
+    if envelope.is_empty() || canary.is_empty() {
+        return Err("PUBKEY tidak sah / terpotong: kem_seal_pub hasil kosong. Paste PUBKEY lengkap 512 karakter, jangan pakai ...".into());
+    }
     let envelope_b64 = general_purpose::STANDARD.encode(envelope);
     let canary_b64 = general_purpose::STANDARD.encode(canary);
 
@@ -593,6 +721,243 @@ pub fn run_handshake_listen(
         let envelope_str = String::from_utf8(envelope_raw)?;
         let opened = kem_open(keyseed, &envelope_str, &hello.tier)
             .ok_or("KEM gagal dibuka: kunci salah / envelope diubah")?;
+        let mut parts = opened.split(':');
+        let tp_seed_hex = parts.next().ok_or("tp_seed hilang")?.to_string();
+        let client_nonce = parts.next().ok_or("client_nonce hilang")?.to_string();
+        if client_nonce != hello.client_nonce_hex {
+            eprintln!("[HS] Nonce di envelope != nonce di hello, ditolak. trace={}", trace_id);
+            continue;
+        }
+
+        // Bangun transport sesi dari tp_seed asli.
+        // URUTAN BENAR: kirim PROOF dulu lewat holder, BARU take().
+        // Kalau take() dulu, holder jadi None dan kirim PROOF panik di .unwrap().
+        let seed_bytes = hex::decode(&tp_seed_hex)?;
+        let seed_arr: [u8; 32] = seed_bytes.try_into().map_err(|_| "tp_seed bukan 32 byte")?;
+        let session_key = derive_session_key(&seed_arr, tier)?;
+        let hopper_seed = derive_hopper_seed(&seed_arr);
+
+        // Kirim bukti ServerHello lewat socket mentah yang sama dengan HELLO.
+        // Jangan lewat UdpTransport, karena pengirim menunggu PROOF mentah.
+        let server_nonce = random_hex(16);
+        let proof = format!(
+            "PROOF:{}|{}|{}|{}",
+            chosen.to_string(),
+            server_nonce,
+            client_nonce,
+            trace_id
+        );
+        let _ = std_sock_holder
+            .as_ref()
+            .unwrap()
+            .send_to(proof.as_bytes(), src);
+
+        // BARU take() setelah PROOF terkirim, supaya port bebas
+        // untuk dipakai transport FCR-TP untuk DATA.
+        std_sock_holder.take();
+        let mut transport = UdpTransport::bind(bind, hopper_seed, session_key, SocketConfig::default())?;
+        println!("[HS] ServerHello terkirim. chosen={} trace={}", chosen.to_string(), trace_id);
+
+        // Tunggu DATA lewat transport sesi.
+        let (result, anomaly) = transport
+            .recv_chunk()
+            .map_err(|e| format!("recv data gagal: {}", e))?;
+        if let Some(report) = anomaly {
+            eprintln!("Anomali data: {:?}", report);
+        }
+        if let Some(msg) = result {
+            let txt = String::from_utf8_lossy(&msg.payload).to_string();
+            if let Some(data) = txt.strip_prefix("DATA:") {
+                println!("Pesan diterima (handshake sah): {}", data);
+                received += 1;
+            } else if txt.starts_with("PROOF:") {
+                // Proof yang terpantul, abaikan.
+                continue;
+            } else {
+                println!("Pesan diterima: {}", txt);
+                received += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn run_handshake_listen_priv(
+    bind: &str,
+    keyseed: &str,
+    tier: &str,
+    max_messages: usize,
+    offered_str: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let my_offered = parse_offered(offered_str);
+    let mut seen_nonces: HashSet<String> = HashSet::new();
+    let mut received = 0usize;
+
+    // Kita dengarkan dengan transport sementara yang bisa menerima hello.
+    // Hello pertama diterima dengan kunci sementara dari keyseed,
+    // lalu setelah seed asli didapat, kita pindah ke transport sesi.
+    // Untuk prototipe: kita pakai 2 fase - fase hello pakai UdpTransport generik
+    // yang dibangun dari keyseed, fase data pakai tp_seed.
+    // Implementasi sederhana di sini: satu socket UDP mentah untuk hello,
+    // lalu UdpTransport untuk data.
+    // Agar tidak mengubah fcr-tp di langkah ini, kita pakai UdpTransport
+    // yang dibangun dari keyseed untuk menerima hello, lalu rebuild untuk data.
+    let tmp_seed = session_seed_from_secret(&format!("fcr-hs-tmp:{}:{}", tier, keyseed));
+    let tmp_key = derive_session_key(&tmp_seed, tier)?;
+    let tmp_hopper = derive_hopper_seed(&tmp_seed);
+    let tmp_transport = UdpTransport::bind(bind, tmp_hopper, tmp_key, SocketConfig::default())?;
+    println!(
+        "[HS] Mendengarkan handshake di {} ... (offered: {})",
+        tmp_transport.local_addr()?,
+        offered_str
+    );
+
+    // Fase 1: tunggu HELLO. Di prototipe ini, pengirim mengirim HELLO lewat
+    // transport tp_seed, bukan tmp. Jadi kita tidak bisa dekripsi HELLO di sini
+    // dengan tmp_key. Solusi prototipe: pengirim juga mengirim HELLO kedua
+    // lewat tmp? Untuk menjaga langkah ini tetap jalan di 2 terminal,
+    // kita implementasi penerimaan HELLO dengan cara:
+    // - Kita terima HELLO sebagai pesan mentah lewat std UdpSocket di bind yang sama.
+    //   Ini hanya untuk demo handshake, bukan untuk data.
+    // Catatan: ini jalan karena kita memakai bind yang sama di kedua fase.
+    // Langkah berikutnya (Prioritas 2b) akan pindahkan ini ke frame handshake
+    // native di fcr-tp, supaya tidak ada 2 socket.
+    //
+    // Untuk menjaga kode ini tetap kompilasi dan jalan di sesi ini,
+    // kita pakai pendekatan: dengarkan HELLO lewat tmp_transport,
+    // dengan asumsi pengirim mengirim HELLO lewat tmp juga di versi final.
+    // Di run_handshake_send di atas, HELLO dikirim lewat tp_seed.
+    // Agar keduanya cocok, kita samakan di sini: kita akan mencoba
+    // menerima HELLO dengan membuka UdpTransport dari tp_seed setelah
+    // kita tahu tp_seed? Itu circular.
+    //
+    // Jalan keluar prototipe yang jujur dan bisa diuji hari ini:
+    // Kita terima HELLO lewat std::net::UdpSocket mentah (tanpa FCR-TP),
+    // karena HELLO itu sendiri sudah terbungkus KEM + HMAC.
+    // Data setelahnya baru lewat FCR-TP.
+    drop(tmp_transport);
+
+    let mut std_sock_holder = Some(std::net::UdpSocket::bind(bind)?);
+    std_sock_holder
+        .as_ref()
+        .unwrap()
+        .set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    let mut buf = vec![0u8; 8192];
+
+    while received < max_messages {
+        if std_sock_holder.is_none() {
+            let s = std::net::UdpSocket::bind(bind)?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+            std_sock_holder = Some(s);
+        }
+        let (len, src) = std_sock_holder
+            .as_ref()
+            .unwrap()
+            .recv_from(&mut buf)
+            .map_err(|e| format!("recv hello gagal: {}", e))?;
+        let raw = String::from_utf8_lossy(&buf[..len]).to_string();
+        if !raw.starts_with("HELLO:") {
+            continue;
+        }
+        let hello_str = raw.trim_start_matches("HELLO:").to_string();
+        let hello = match HandshakeHello::decode(&hello_str) {
+            Some(h) => h,
+            None => {
+                eprintln!("[HS] HELLO format tidak sah dari {}", src);
+                continue;
+            }
+        };
+
+        // --- Verifikasi ---
+        let now = now_unix();
+        let stale = now.saturating_sub(hello.timestamp) > 30 || hello.timestamp > now + 5;
+        let replay = seen_nonces.contains(&hello.client_nonce_hex);
+        let tier_mismatch = hello.tier.to_lowercase() != tier.to_lowercase();
+        // Canary tersentuh kalau ada yang kirim canary sebagai envelope asli.
+        // Di sini kita deteksi: kalau envelope bisa dibuka tapi isinya canary_id, itu jebakan.
+        let mut canary_touched = false;
+        // envelope_b64 di HELLO adalah double-base64: decode sekali dulu,
+        // baru kem_open (yang decrypt ciphertext 4 bagian asli).
+        let envelope_single_b64 = general_purpose::STANDARD
+            .decode(&hello.envelope_b64)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .unwrap_or_default();
+        if let Some(opened) = kem_open_priv(keyseed, &envelope_single_b64, &hello.tier) {
+            // Format asli: tp_seed:client_nonce. Format canary: canary_seed:canary_id
+            // Kalau yang dibuka mengandung canary_id, berarti penyerang kirim canary sebagai asli.
+            if opened.contains(&hello.canary_id) {
+                canary_touched = true;
+            }
+        }
+
+        let score = risk_score_for(replay, canary_touched, tier_mismatch, stale);
+        let trace_id = make_trace_id(&hello.client_nonce_hex, &hello.canary_id, src);
+
+        println!(
+            "[HS] HELLO dari {} | tier={} | offered={:?} | risk={} | trace={}",
+            src,
+            hello.tier,
+            hello.offered,
+            score,
+            trace_id
+        );
+
+        if score >= 70 || stale || replay || tier_mismatch {
+            // Sesuai rel: balas dengan ciphertext VALID berisi Poisoned Pill + trace_id,
+            // bukan error terang-terangan. Pelaku kira berhasil, padahal ketahuan.
+            let pill = format!(
+                "POISONED-PILL|trace_id={}|reason=replay={} canary={} tier_mismatch={} stale={} risk={}|forensic: source={} ts={}",
+                trace_id, replay, canary_touched, tier_mismatch, stale, score, src, now
+            );
+            let _ = std_sock_holder
+                .as_ref()
+                .unwrap()
+                .send_to(pill.as_bytes(), src);
+            println!("[HS] AUTO-IMUN: Risk {} / anomali (tier_mismatch={} replay={} canary={} stale={}). Poisoned Pill dikirim. trace_id={}", score, tier_mismatch, replay, canary_touched, stale, trace_id);
+            println!("[HS] INCIDENT REPORT: WHO={} WHEN={} WHAT=handshake_ditolak risk={} trace={}", src, now, score, trace_id);
+            continue;
+        }
+
+        // Negosiasi parameter: pilih yang terkuat yang sama-sama didukung.
+        let chosen = match negotiate(&my_offered, &hello.offered) {
+            Some(c) => c,
+            None => {
+                eprintln!("[HS] Tidak ada parameter yang sama, handshake ditolak. trace={}", trace_id);
+                continue;
+            }
+        };
+        seen_nonces.insert(hello.client_nonce_hex.clone());
+
+        // Buka envelope asli untuk dapat tp_seed.
+        let envelope_raw = match general_purpose::STANDARD.decode(&hello.envelope_b64) {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("[HS] envelope_b64 tidak sah dari {}, dilewati. trace={}", src, trace_id);
+                continue;
+            }
+        };
+        let envelope_str = match String::from_utf8(envelope_raw) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("[HS] envelope bukan UTF-8 dari {}, dilewati. trace={}", src, trace_id);
+                continue;
+            }
+        };
+        let opened = match kem_open_priv(keyseed, &envelope_str, &hello.tier) {
+            Some(o) => o,
+            None => {
+                // JANGAN return Err: itu menutup socket listener dan pengirim kena 10054.
+                // Perlakukan sebagai anomali: balas Poisoned Pill + trace_id, lanjut dengarkan.
+                let pill = format!(
+                    "POISONED-PILL|trace_id={}|reason=kem_open_gagal risk={}|forensic: source={} ts={}",
+                    trace_id, score, src, now
+                );
+                let _ = std_sock_holder.as_ref().unwrap().send_to(pill.as_bytes(), src);
+                println!("[HS] AUTO-IMUN: KEM gagal dibuka (PUBKEY terpotong / kunci salah / envelope diubah). Poisoned Pill dikirim. trace_id={}", trace_id);
+                continue;
+            }
+        };
         let mut parts = opened.split(':');
         let tp_seed_hex = parts.next().ok_or("tp_seed hilang")?.to_string();
         let client_nonce = parts.next().ok_or("client_nonce hilang")?.to_string();
