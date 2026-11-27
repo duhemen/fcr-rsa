@@ -79,6 +79,40 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
+        Commands::TpHsSend {
+            peer,
+            text,
+            keyseed,
+            tier,
+            bind,
+            offered,
+        } => match transport::run_handshake_send(&bind, *peer, &keyseed, &tier, &text, &offered) {
+            Ok(n) => {
+                println!("Handshake + kirim selesai, {} frame.", n);
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal handshake-send: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
+        Commands::TpHsListen {
+            bind,
+            keyseed,
+            tier,
+            count,
+            offered,
+        } => match transport::run_handshake_listen(&bind, &keyseed, &tier, *count, &offered) {
+            Ok(()) => {
+                println!("Selesai mendengarkan handshake.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal handshake-listen: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
 
         // Semua perintah lain BUTUH database -> lanjut ke bawah.
         _ => {}
@@ -258,6 +292,9 @@ async fn main() -> ExitCode {
         // Tetap ada agar match exhaustive.
         Commands::TpSend { .. } | Commands::TpListen { .. } => {
             unreachable!("transport sudah ditangani sebelum koneksi DB")
+        }
+        Commands::TpHsSend { .. } | Commands::TpHsListen { .. } => {
+            unreachable!("handshake sudah ditangani sebelum koneksi DB")
         }
     }
 

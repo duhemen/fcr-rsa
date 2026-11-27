@@ -1,123 +1,131 @@
-//! CLI definition (Clap) — dipisah dari main.rs agar rapi.
-
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 
-#[derive(Parser)]
-#[command(name = "fcr-engine")]
-#[command(version = "0.1.0")]
-#[command(about = "FCR-RSA Engine: CLI + REST API (Research Prototype)", long_about = None)]
+#[derive(Parser, Debug)]
+#[command(name = "fcr-engine", about = "FCR-RSA Engine: CLI + REST API + FCR-TP")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Generate a new key and save it to PostgreSQL
+    /// Buat kunci baru
     Keygen {
         #[arg(short = 'N', long)]
         name: String,
-        #[arg(short, long, default_value = "fcr-rsa-demo-seed")]
+        #[arg(short = 's', long)]
         seed: String,
-        #[arg(short = 'i', long, default_value_t = 10)]
+        #[arg(short = 'n', long, default_value_t = 10)]
         n: usize,
-        #[arg(short = 'q', long, default_value = "1000000007")]
+        #[arg(short = 'q', long, default_value = "2048")]
         q: String,
     },
-
-    /// List all keys in the database
+    /// Daftar kunci
     ListKeys,
-
-    /// Encrypt a plaintext message
+    /// Enkripsi teks
     Encrypt {
         #[arg(short = 'm', long)]
         text: String,
         #[arg(short = 'k', long)]
         keyname: String,
-        /// (Opsional) Jika tidak diisi, akan menggunakan mode acak (IND-CPA)
-        #[arg(short = 'b', long)]
+        #[arg(long)]
         blinding: Option<String>,
-        #[arg(short = 't', long, default_value = "b")]
+        #[arg(long, default_value = "b")]
         tier: String,
     },
-
-    /// Decrypt a ciphertext message
+    /// Dekripsi teks
     Decrypt {
-        /// Ciphertext (Format: BLINDING:CT1,CT2,... atau CT1,CT2,...)
         #[arg(short = 'c', long)]
         ciphertext: String,
         #[arg(short = 'k', long)]
         keyname: String,
-        /// (Opsional) Hanya diperlukan jika ciphertext tidak menyertakan blinding
-        #[arg(short = 'b', long)]
+        #[arg(long)]
         blinding: Option<String>,
-        #[arg(short = 't', long, default_value = "b")]
+        #[arg(long, default_value = "b")]
         tier: String,
     },
-
-    /// Kelola API key untuk REST API
+    /// Manajemen API key
     Apikey {
         #[command(subcommand)]
         action: ApikeyAction,
     },
-
     /// Jalankan REST API server
     Serve {
-        /// Port server (default 8080, override via env FCR_PORT)
-        #[arg(short, long)]
+        #[arg(long)]
         port: Option<u16>,
     },
-    /// Kirim satu pesan teks ke peer lewat FCR-TP (UDP + port hopping)
+    // ===== FCR-TP lama, tetap dipertahankan untuk demo =====
+    /// Kirim lewat FCR-TP dengan secret manual (demo / kompatibilitas)
     TpSend {
-        /// Alamat peer, mis. 127.0.0.1:50000
         #[arg(long)]
         peer: SocketAddr,
-        /// Teks yang dikirim
-        #[arg(short = 'm', long)]
+        #[arg(long)]
         text: String,
-        /// Secret sesi bersama (HARUS sama di kedua pihak)
-        #[arg(short = 's', long)]
+        #[arg(long)]
         secret: String,
-        /// Tier: a atau b (harus sama di kedua pihak)
-        #[arg(short = 't', long, default_value = "b")]
+        #[arg(long, default_value = "b")]
         tier: String,
-        /// Alamat bind lokal (default: port acak)
         #[arg(long, default_value = "0.0.0.0:0")]
         bind: String,
     },
-
-    /// Dengarkan pesan masuk lewat FCR-TP
+    /// Dengarkan FCR-TP dengan secret manual (demo / kompatibilitas)
     TpListen {
-        /// Alamat bind lokal, mis. 0.0.0.0:50000
         #[arg(long, default_value = "0.0.0.0:50000")]
         bind: String,
-        /// Secret sesi bersama (HARUS sama di kedua pihak)
-        #[arg(short = 's', long)]
+        #[arg(long)]
         secret: String,
-        /// Tier: a atau b (harus sama di kedua pihak)
-        #[arg(short = 't', long, default_value = "b")]
+        #[arg(long, default_value = "b")]
         tier: String,
-        /// Berapa pesan lengkap yang ditunggu sebelum berhenti
         #[arg(long, default_value_t = 1)]
         count: usize,
     },
+    // ===== FCR-TP baru: Handshake UDP + KEM + Canary + Auto-Imun =====
+    /// Handshake UDP langsung: tukar seed lewat KEM, tanpa --secret ketik manual
+    TpHsSend {
+        #[arg(long)]
+        peer: SocketAddr,
+        #[arg(long)]
+        text: String,
+        /// Seed kunci bersama untuk KEM demo (produksi: ganti dengan KeyRecord terpisah).
+        /// Ini BUKAN secret sesi. Secret sesi dibuat acak per sesi oleh mesin.
+        #[arg(long)]
+        keyseed: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value = "0.0.0.0:0")]
+        bind: String,
+        /// Parameter yang ditawarkan, dipisah koma. Contoh: v1-U2048,v2-U4096
+        /// Mesin pilih yang terkuat yang sama-sama didukung. Everlasting: tambah v baru tanpa bongkar lama.
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
+    /// Dengarkan handshake UDP: verifikasi KEM + canary + anti-replay
+    TpHsListen {
+        #[arg(long, default_value = "0.0.0.0:50000")]
+        bind: String,
+        #[arg(long)]
+        keyseed: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value_t = 1)]
+        count: usize,
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum ApikeyAction {
-    /// Buat API key baru (plaintext hanya ditampilkan sekali)
     Create {
-        #[arg(short = 'u', long)]
+        #[arg(long)]
         user: String,
-        #[arg(short = 'l', long)]
+        #[arg(long)]
         label: Option<String>,
     },
-    /// Daftar API key (tanpa plaintext, hanya prefix & metadata)
     List,
-    /// Nonaktifkan API key berdasarkan prefix
     Revoke {
-        #[arg(short = 'p', long)]
+        #[arg(long)]
         prefix: String,
     },
 }
