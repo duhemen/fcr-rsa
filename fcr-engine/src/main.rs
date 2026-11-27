@@ -183,6 +183,37 @@ async fn main() -> ExitCode {
             }
         },
 
+        Commands::TpProvePubCannotDecrypt { pubkey, tier } => {
+            match transport::run_prove_pub_cannot_decrypt(pubkey, tier) {
+                Ok(()) => {
+                    println!("Pembuktian 1 selesai: TERBUKTI.");
+                    return ExitCode::SUCCESS;
+                }
+                Err(e) => {
+                    eprintln!("Pembuktian 1 GAGAL: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
+        Commands::TpHsCanaryAttack {
+            peer,
+            text,
+            pubkey,
+            tier,
+            bind,
+            offered,
+        } => match transport::run_handshake_canary_attack(bind, *peer, pubkey, tier, text, offered) {
+            Ok(()) => {
+                println!("Pembuktian 2 selesai: TERBUKTI.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Pembuktian 2 GAGAL: {}", e);
+                return ExitCode::FAILURE;
+            }
+        },
+
         // Semua perintah lain BUTUH database -> lanjut ke bawah.
         _ => {}
     }
@@ -366,7 +397,9 @@ async fn main() -> ExitCode {
         | Commands::TpHsSendPub { .. }
         | Commands::TpHsListenPriv { .. }
         | Commands::TpKeyPub { .. }
-        | Commands::TpHsReplay { .. } => {
+        | Commands::TpHsReplay { .. }
+        | Commands::TpProvePubCannotDecrypt { .. }
+        | Commands::TpHsCanaryAttack { .. } => {
             unreachable!("transport / handshake sudah ditangani sebelum koneksi DB")
         }
     }

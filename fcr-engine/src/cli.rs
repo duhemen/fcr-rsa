@@ -150,6 +150,28 @@ pub enum Commands {
         #[arg(long, default_value = "v1-U2048,v2-U4096")]
         offered: String,
     },
+    /// BUKTI 1: coba buka segel KEM hanya dengan PUBKEY, harus GAGAL
+    TpProvePubCannotDecrypt {
+        #[arg(long)]
+        pubkey: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+    },
+    /// BUKTI 2: kirim canary sebagai envelope asli, harus ditolak + Poisoned Pill
+    TpHsCanaryAttack {
+        #[arg(long)]
+        peer: SocketAddr,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        pubkey: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value = "0.0.0.0:0")]
+        bind: String,
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
     /// Handshake terima pakai PRIVAT saja (keyseed)
     TpHsListenPriv {
         #[arg(long, default_value = "0.0.0.0:50000")]

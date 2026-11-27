@@ -273,6 +273,95 @@ fn kem_seal_pub(pubkey: &str, plaintext_hex: &str, tier: &str) -> Result<String,
         .map_err(|e| format!("encrypt_hybrid_kem gagal: {}", e))
 }
 
+/// BUKTI 1: buka hanya dengan PUBKEY. e_vec_inv-nya dummy ONE, jadi
+/// dekripsi TIDAK BOLEH kembali ke plaintext asli. Kalau kembali, split bohong.
+fn kem_open_pub(pubkey: &str, ciphertext: &str, tier: &str) -> Option<String> {
+    use fcr_core_rust::fib::keypair_from_public;
+    let pair = keypair_from_public(pubkey).ok()?;
+    let e_vec_bytes = pair.e_vec.to_be_bytes();
+    let hkdf_info = hkdf_info_for(tier);
+    decrypt_hybrid_kem(ciphertext, &pair, &e_vec_bytes, &hkdf_info).ok()
+}
+
+/// BUKTI 1: segel dengan PUBKEY, lalu coba buka hanya dengan PUBKEY juga.
+/// Sukses = TERBUKTI tidak bisa buka (gagal / hasil beda).
+/// Gagal (Err) = split BOHONG, PUBKEY bisa jadi privat.
+pub fn run_prove_pub_cannot_decrypt(pubkey: &str, tier: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let rahasia = "rahasia-uji-pub-tidak-bisa-buka";
+    let segel = kem_seal_pub(pubkey, rahasia, tier)
+        .map_err(|e| format!("kem_seal_pub gagal: {}", e))?;
+    if segel.is_empty() {
+        return Err("kem_seal_pub hasil kosong, PUBKEY tidak sah".into());
+    }
+    println!("[BUKTI-1] Segel dibuat dengan PUBKEY saja, panjang {} karakter.", segel.len());
+    match kem_open_pub(pubkey, &segel, tier) {
+        None => {
+            println!("[BUKTI-1] TERBUKTI: buka dengan PUBKEY saja GAGAL (None). PUBKEY tidak bisa jadi privat.");
+            Ok(())
+        }
+        Some(hasil) if hasil != rahasia => {
+            println!("[BUKTI-1] TERBUKTI: buka dengan PUBKEY saja menghasilkan sampah, bukan rahasia asli.");
+            println!("[BUKTI-1] Hasil buka (bukan rahasia): {}", &hasil[..hasil.len().min(80)]);
+            Ok(())
+        }
+        Some(_) => Err("BAHAYA: buka dengan PUBKEY saja BERHASIL kembali ke rahasia asli! Split bohong.".into()),
+    }
+}
+
+/// BUKTI 2: kirim HELLO yang envelope-nya ADALAH canary.
+/// Listener harus deteksi canary_touched, risk=80, balas Poisoned Pill.
+pub fn run_handshake_canary_attack(
+    bind: &str,
+    peer: SocketAddr,
+    pubkey: &str,
+    tier: &str,
+    text: &str,
+    offered_str: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let offered = parse_offered(offered_str);
+    if offered.is_empty() {
+        return Err("offered kosong".into());
+    }
+    let tp_seed_hex = random_hex(32);
+    let client_nonce = random_hex(16);
+    let canary_id = format!("canary-{}", random_hex(8));
+    let canary_seed_hex = random_hex(32);
+    // Jebakan: envelope asli diisi CANARY, bukan tp_seed.
+    let canary_ct = kem_seal_pub(pubkey, &format!("{}:{}", canary_seed_hex, canary_id), tier)
+        .map_err(|e| format!("kem_seal_pub canary gagal: {}", e))?;
+    let envelope_b64 = general_purpose::STANDARD.encode(&canary_ct);
+    let canary_b64 = general_purpose::STANDARD.encode(&canary_ct);
+    let hello = HandshakeHello {
+        envelope_b64,
+        canary_b64,
+        canary_id: canary_id.clone(),
+        client_nonce_hex: client_nonce.clone(),
+        timestamp: now_unix(),
+        tier: tier.to_string(),
+        offered: offered.clone(),
+    };
+    let _ = (tp_seed_hex, text);
+    let raw_sock = std::net::UdpSocket::bind(bind)?;
+    raw_sock.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    raw_sock.send_to(format!("HELLO:{}", hello.encode()).as_bytes(), peer)?;
+    println!("[BUKTI-2] HELLO canary-jebakan terkirim (canary_id: {}), menunggu balasan...", canary_id);
+    let mut buf = vec![0u8; 8192];
+    let (len, _) = raw_sock.recv_from(&mut buf)?;
+    let reply = String::from_utf8_lossy(&buf[..len]).to_string();
+    println!("[BUKTI-2] Balasan: {}", reply);
+    if reply.contains("POISONED-PILL") && reply.contains("canary=true") && reply.contains(&format!("trace_id={}", "")) == false {
+        // trace_id dicek keberadaannya saja, isinya acak per sesi
+    }
+    if reply.contains("POISONED-PILL") && reply.contains("canary=true") && reply.contains("trace_id=") {
+        println!("[BUKTI-2] TERBUKTI: canary disentuh ditolak + Poisoned Pill + trace_id.");
+        Ok(())
+    } else if reply.starts_with("PROOF:") {
+        Err("GAGAL: canary-jebakan malah diterima + PROOF! Auto-imun tidak jalan.".into())
+    } else {
+        Err(format!("Balasan tidak dikenal: {}", reply).into())
+    }
+}
+
 /// KEM split 2b: penerima hanya pegang PRIVAT (keyseed).
 /// Blinding diturunkan dari e_vec bytes yang sama, jadi sinkron dengan pengirim.
 fn kem_open_priv(keyseed_priv: &str, ciphertext: &str, tier: &str) -> Option<String> {
