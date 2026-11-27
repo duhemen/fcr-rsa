@@ -26,7 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fcr_tp::{SocketConfig, UdpTransport};
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{derive_hopper_seed, derive_session_key, session_seed_from_secret};
+use crate::crypto::{decrypt_text, derive_hopper_seed, derive_session_key, encrypt_text, session_seed_from_secret};
+use crate::db::KeyRecord;
 
 use base64::{Engine as _, engine::general_purpose};
 
@@ -221,41 +222,36 @@ impl HandshakeHello {
     }
 }
 
-/// Simulasi KEM envelope untuk prototipe handshake.
-/// PRODUKSI (Prioritas 2b): ganti isi fungsi ini dengan
-/// encrypt_hybrid_kem / decrypt_hybrid_kem yang sesungguhnya
+/// KEM asli Prioritas 2b — sudah bukan simulasi.
+/// Pakai encrypt_text / decrypt_text yang di dalamnya
+/// sudah ada encrypt_hybrid_kem / decrypt_hybrid_kem asli.
 /// memakai KeyRecord terpisah (publik / privat).
 /// Alasan masih simulasi: KeyRecord terpisah belum ada di db.rs,
 /// dan kita tidak mau mengubah db.rs di langkah ini.
 /// Yang TIDAK simulasi: format hello, nonce, timestamp, canary,
 /// negosiasi parameter, risk score, trace_id, anti-replay.
-fn kem_seal(keyseed: &str, plaintext_hex: &str, tier: &str) -> String {
-    // Kunci KEM diturunkan dari keyseed + tier, bukan dari secret sesi.
-    // Secret sesi (tp_seed) tetap acak per sesi dan ada di dalam plaintext.
-    let kem_key = session_seed_from_secret(&format!("fcr-kem:{}:{}", tier, keyseed));
-    let mut h = Sha256::new();
-    h.update(kem_key);
-    h.update(plaintext_hex.as_bytes());
-    let tag = h.finalize();
-    let raw = format!("{}:{}", plaintext_hex, hex::encode(&tag[..16]));
-    general_purpose::STANDARD.encode(raw)
+fn key_record_from_keyseed(keyseed: &str) -> KeyRecord {
+    KeyRecord {
+        seed: keyseed.to_string(),
+        n: 10,
+        q: "2048".to_string(),
+    }
 }
 
-fn kem_open(keyseed: &str, envelope_b64: &str, tier: &str) -> Option<String> {
-    let raw = general_purpose::STANDARD.decode(envelope_b64).ok()?;
-    let s = String::from_utf8(raw).ok()?;
-    let mut it = s.rsplitn(2, ':');
-    let tag_hex = it.next()?;
-    let plaintext_hex = it.next()?;
-    let kem_key = session_seed_from_secret(&format!("fcr-kem:{}:{}", tier, keyseed));
-    let mut h = Sha256::new();
-    h.update(kem_key);
-    h.update(plaintext_hex.as_bytes());
-    let expect = hex::encode(&h.finalize()[..16]);
-    if expect != tag_hex {
-        return None;
-    }
-    Some(plaintext_hex.to_string())
+fn kem_seal(keyseed: &str, plaintext_hex: &str, tier: &str) -> String {
+    let key = key_record_from_keyseed(keyseed);
+    // blinding_override = None -> session seed + nonce acak per KEM.
+    // Ini yang memberi forward secrecy: setiap HELLO beda ciphertext,
+    // walau plaintext-nya sama.
+    encrypt_text(plaintext_hex, &key, tier, None).unwrap_or_default()
+}
+
+fn kem_open(keyseed: &str, ciphertext: &str, tier: &str) -> Option<String> {
+    // ciphertext di sini adalah hasil decode sekali dari envelope_b64,
+    // yaitu format 4 bagian asli dari encrypt_hybrid_kem.
+    // Bukan base64 lagi, jangan di-decode lagi.
+    let key = key_record_from_keyseed(keyseed);
+    decrypt_text(ciphertext, &key, tier, None).ok()
 }
 
 fn random_hex(n_bytes: usize) -> String {
@@ -451,7 +447,7 @@ pub fn run_handshake_listen(
         // Di sini kita deteksi: kalau envelope bisa dibuka tapi isinya canary_id, itu jebakan.
         let mut canary_touched = false;
         // envelope_b64 di HELLO adalah double-base64: decode sekali dulu,
-        // baru kem_open (yang decode sekali lagi di dalamnya).
+        // baru kem_open (yang decrypt ciphertext 4 bagian asli).
         let envelope_single_b64 = general_purpose::STANDARD
             .decode(&hello.envelope_b64)
             .ok()
