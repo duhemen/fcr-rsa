@@ -356,6 +356,88 @@ pub fn run_handshake_send(
     Ok(sent_hello + sent)
 }
 
+/// Uji replay: kirim HELLO yang SAMA PERSIS 2x.
+/// HELLO pertama harus diterima + PROOF + DATA terkirim.
+/// HELLO kedua (byte sama, nonce sama) harus DITOLAK +
+/// Poisoned Pill + trace_id. Kalau yang kedua malah diterima,
+/// berarti anti-replay kita bohong.
+pub fn run_handshake_replay(
+    bind: &str,
+    peer: SocketAddr,
+    keyseed: &str,
+    tier: &str,
+    text: &str,
+    offered_str: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let offered = parse_offered(offered_str);
+    if offered.is_empty() {
+        return Err("offered kosong".into());
+    }
+    // Bangun HELLO sekali saja, pakai nonce + seed yang sama.
+    // Inilah yang membuat HELLO kedua adalah replay murni,
+    // bukan HELLO baru dengan nonce baru.
+    let tp_seed_hex = random_hex(32);
+    let client_nonce = random_hex(16);
+    let canary_id = format!("canary-{}", random_hex(8));
+    let canary_seed_hex = random_hex(32);
+    let envelope = kem_seal(keyseed, &format!("{}:{}", tp_seed_hex, client_nonce), tier);
+    let canary = kem_seal(keyseed, &format!("{}:{}", canary_seed_hex, canary_id), tier);
+    let envelope_b64 = general_purpose::STANDARD.encode(envelope);
+    let canary_b64 = general_purpose::STANDARD.encode(canary);
+    let hello = HandshakeHello {
+        envelope_b64,
+        canary_b64,
+        canary_id: canary_id.clone(),
+        client_nonce_hex: client_nonce.clone(),
+        timestamp: now_unix(),
+        tier: tier.to_string(),
+        offered,
+    };
+    let hello_str = hello.encode();
+    let hello_bytes = format!("HELLO:{}", hello_str).into_bytes();
+
+    // --- Kiriman 1: harus sukses ---
+    println!("[REPLAY] Kiriman 1: HELLO asli, harus diterima...");
+    let raw1 = std::net::UdpSocket::bind(bind)?;
+    raw1.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    raw1.send_to(&hello_bytes, peer)?;
+    let mut buf = vec![0u8; 8192];
+    let (len, _) = raw1.recv_from(&mut buf)?;
+    let reply1 = String::from_utf8_lossy(&buf[..len]).to_string();
+    if !reply1.starts_with("PROOF:") {
+        return Err(format!("Kiriman 1 gagal, bukan PROOF: {}", reply1).into());
+    }
+    println!("[REPLAY] Kiriman 1: PROOF diterima, kirim DATA...");
+    drop(raw1);
+    // Kirim DATA lewat transport sesi
+    let seed_bytes = hex::decode(&tp_seed_hex)?;
+    let seed_arr: [u8; 32] = seed_bytes.try_into().map_err(|_| "tp_seed bukan 32 byte")?;
+    let session_key = derive_session_key(&seed_arr, tier)?;
+    let hopper_seed = derive_hopper_seed(&seed_arr);
+    let mut transport = UdpTransport::bind(bind, hopper_seed, session_key, SocketConfig::default())?;
+    transport.send_payload(peer, format!("DATA:{}", text).as_bytes())?;
+    drop(transport);
+    // Kasih waktu listener balik ke fase HELLO
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // --- Kiriman 2: HELLO yang SAMA PERSIS, harus ditolak ---
+    println!("[REPLAY] Kiriman 2: HELLO yang SAMA PERSIS, harus DITOLAK...");
+    let raw2 = std::net::UdpSocket::bind(bind)?;
+    raw2.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    raw2.send_to(&hello_bytes, peer)?;
+    let (len2, _) = raw2.recv_from(&mut buf)?;
+    let reply2 = String::from_utf8_lossy(&buf[..len2]).to_string();
+    println!("[REPLAY] Balasan kiriman 2: {}", reply2);
+    if reply2.contains("POISONED-PILL") && reply2.contains("replay=true") {
+        println!("[REPLAY] TERBUKTI: replay ditolak + Poisoned Pill + trace_id. Anti-replay jalan.");
+        Ok(())
+    } else if reply2.starts_with("PROOF:") {
+        Err("GAGAL: replay malah diterima + PROOF! Anti-replay tidak jalan.".into())
+    } else {
+        Err(format!("Balasan kiriman 2 tidak dikenal: {}", reply2).into())
+    }
+}
+
 /// Penerima handshake: verifikasi hello, canary, anti-replay, kirim bukti, terima data.
 pub fn run_handshake_listen(
     bind: &str,
@@ -420,6 +502,11 @@ pub fn run_handshake_listen(
     let mut buf = vec![0u8; 8192];
 
     while received < max_messages {
+        if std_sock_holder.is_none() {
+            let s = std::net::UdpSocket::bind(bind)?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+            std_sock_holder = Some(s);
+        }
         let (len, src) = std_sock_holder
             .as_ref()
             .unwrap()

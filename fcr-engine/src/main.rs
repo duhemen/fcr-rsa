@@ -296,6 +296,23 @@ async fn main() -> ExitCode {
         Commands::TpHsSend { .. } | Commands::TpHsListen { .. } => {
             unreachable!("handshake sudah ditangani sebelum koneksi DB")
         }
+        Commands::TpHsReplay {
+            peer,
+            text,
+            keyseed,
+            tier,
+            bind,
+            offered,
+        } => match transport::run_handshake_replay(&bind, peer, &keyseed, &tier, &text, &offered) {
+            Ok(()) => {
+                println!("Uji replay selesai: TERBUKTI ditolak.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Gagal uji replay: {}", e);
+                return ExitCode::FAILURE;
+            }
+        }
     }
 
     ExitCode::SUCCESS

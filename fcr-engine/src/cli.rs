@@ -100,6 +100,23 @@ pub enum Commands {
         #[arg(long, default_value = "v1-U2048,v2-U4096")]
         offered: String,
     },
+
+    /// Uji replay: kirim HELLO yang sama persis 2x, yang kedua harus ditolak
+    TpHsReplay {
+        #[arg(long)]
+        peer: SocketAddr,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        keyseed: String,
+        #[arg(long, default_value = "b")]
+        tier: String,
+        #[arg(long, default_value = "0.0.0.0:0")]
+        bind: String,
+        #[arg(long, default_value = "v1-U2048,v2-U4096")]
+        offered: String,
+    },
+
     /// Dengarkan handshake UDP: verifikasi KEM + canary + anti-replay
     TpHsListen {
         #[arg(long, default_value = "0.0.0.0:50000")]
